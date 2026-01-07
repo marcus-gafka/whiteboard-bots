@@ -1,7 +1,13 @@
 import math
-from Constants import Constants as c
+import os
+import pathlib
+import numpy as np
+from robots.Robot import Robot as r
 
 class PathProcessor:
+
+    INITIAL_SPACING = 0.02
+
     def __init__(self, dxf_file, spacing):
         self.dxf_file = dxf_file
         self.spacing = spacing
@@ -9,8 +15,10 @@ class PathProcessor:
 
     @staticmethod
     def get_bounding_box(points):
-        xs, ys = zip(*points)
-        return min(xs), max(xs), min(ys), max(ys)
+        points = np.array(points)
+        min_x, min_y = points.min(axis=0)
+        max_x, max_y = points.max(axis=0)
+        return min_x, max_x, min_y, max_y
 
     @staticmethod
     def print_bounding_box(points):
@@ -20,29 +28,37 @@ class PathProcessor:
 
     @staticmethod
     def line_to_points(start, end, spacing):
-        x1, y1 = start
-        x2, y2 = end
-        length = math.hypot(x2 - x1, y2 - y1)
+        start = np.array(start)
+        end = np.array(end)
+        vec = end - start
+        length = np.linalg.norm(vec)
         num_segments = max(int(length / spacing), 1)
-        return [(x1 + t * (x2 - x1), y1 + t * (y2 - y1)) for t in [i / num_segments for i in range(num_segments + 1)]]
+        t = np.linspace(0, 1, num_segments + 1)
+        points = start + np.outer(t, vec)
+        return points.tolist()
 
     @staticmethod
     def arc_to_points(center, radius, start_angle, end_angle, spacing):
+        center = np.array(center)
         start_rad = math.radians(start_angle)
         end_rad = math.radians(end_angle)
         if end_rad < start_rad:
             end_rad += 2 * math.pi
         arc_length = radius * (end_rad - start_rad)
         num_segments = max(int(arc_length / spacing), 1)
-        step = (end_rad - start_rad) / num_segments
-        return [(center[0] + radius * math.cos(start_rad + i * step),
-                 center[1] + radius * math.sin(start_rad + i * step)) for i in range(num_segments + 1)]
+        angles = np.linspace(start_rad, end_rad, num_segments + 1)
+        x = center[0] + radius * np.cos(angles)
+        y = center[1] + radius * np.sin(angles)
+        points = np.stack((x, y), axis=-1)
+        return points.tolist()
 
     @staticmethod
     def polyline_to_points(vertices, spacing):
         points = []
+        vertices = np.array(vertices)
         for i in range(len(vertices) - 1):
-            points.extend(PathProcessor.line_to_points(vertices[i], vertices[i + 1], spacing=spacing))
+            segment_points = PathProcessor.line_to_points(vertices[i], vertices[i + 1], spacing=spacing)
+            points.extend(segment_points)
         return points
 
     @staticmethod
@@ -84,46 +100,68 @@ class PathProcessor:
         return geometries, lines, circles, arcs, polylines
 
     @staticmethod
-    def scale_and_translate_geometries(geometries):
-        all_points = [pt for geometry in geometries for pt in geometry]
+    def scale_and_translate_geometries(cls, geometries):
+        all_points = np.vstack([np.array(geometry) for geometry in geometries])
         min_x, max_x, min_y, max_y = PathProcessor.get_bounding_box(all_points)
         width = max_x - min_x
         height = max_y - min_y
-        scale_factor = c.DRAWABLE_WIDTH / width if height < c.ASPECT_RATIO * width else c.DRAWABLE_HEIGHT / height
-        tx = c.DRAWABLE_WIDTH / 2 - ((min_x + max_x) / 2) * scale_factor
-        ty = c.DRAWABLE_HEIGHT / 2 - ((min_y + max_y) / 2) * scale_factor
 
-        return [[(x * scale_factor + tx, y * scale_factor + ty) for (x, y) in geometry] for geometry in geometries]
+        scale_factor = (cls.DRAWABLE_WIDTH / width) if (height < r.get_aspect_ratio(cls) * width) else (cls.DRAWABLE_HEIGHT / height)
+        tx = cls.DRAWABLE_WIDTH / 2 - ((min_x + max_x) / 2) * scale_factor
+        ty = cls.DRAWABLE_HEIGHT / 2 - ((min_y + max_y) / 2) * scale_factor
+
+        scaled_translated = []
+        for geometry in geometries:
+            pts = np.array(geometry)
+            pts = pts * scale_factor
+            pts[:, 0] += tx
+            pts[:, 1] += ty
+            scaled_translated.append(pts.tolist())
+
+        return scaled_translated
 
     @staticmethod
     def dist_points(p1, p2):
-        return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+        p1 = np.array(p1)
+        p2 = np.array(p2)
+        return np.linalg.norm(p1 - p2)
 
     @staticmethod
     def geometry_dist_to_start(p):
-        return min(PathProcessor.dist_points(c.START_XY, p[0]), PathProcessor.dist_points(c.START_XY, p[-1]))
+        start = np.array(r.START_XY)
+        p_arr = np.array(p)
+        dist_start = np.linalg.norm(p_arr[0] - start)
+        dist_end = np.linalg.norm(p_arr[-1] - start)
+        return min(dist_start, dist_end)
 
     @staticmethod
     def geometry_distance(g1, g2):
+        g1 = np.array(g1)
+        g2 = np.array(g2)
+        start = 0
+        end = -1
         candidates = [
-            (PathProcessor.dist_points(g1[-1], g2[0]), False, False),
-            (PathProcessor.dist_points(g1[-1], g2[-1]), False, True),
-            (PathProcessor.dist_points(g1[0], g2[0]), True, False),
-            (PathProcessor.dist_points(g1[0], g2[-1]), True, True),
+            (np.linalg.norm(g1[end] - g2[start]), False, False),
+            (np.linalg.norm(g1[end] - g2[end]), False, True),
+            (np.linalg.norm(g1[start] - g2[start]), True, False),
+            (np.linalg.norm(g1[start] - g2[end]), True, True),
         ]
         return min(candidates, key=lambda x: x[0])
 
     @staticmethod
     def tsp_geometry_order(geometries):
         n = len(geometries)
-        visited = [False] * n
+        visited = np.zeros(n, dtype=bool)
         path = []
 
-        current_index = min(range(n), key=lambda i: PathProcessor.geometry_dist_to_start(geometries[i]))
+        distances_to_start = np.array([PathProcessor.geometry_dist_to_start(g) for g in geometries])
+        current_index = np.argmin(distances_to_start)
         current_geometry = geometries[current_index]
         visited[current_index] = True
 
-        if PathProcessor.dist_points(c.START_XY, current_geometry[0]) > PathProcessor.dist_points(c.START_XY, current_geometry[-1]):
+        dist_to_start_first = PathProcessor.dist_points(r.START_XY, current_geometry[0])
+        dist_to_start_last = PathProcessor.dist_points(r.START_XY, current_geometry[-1])
+        if dist_to_start_first > dist_to_start_last:
             current_geometry = list(reversed(current_geometry))
 
         path.append(current_geometry)
@@ -149,64 +187,44 @@ class PathProcessor:
             visited[best_index] = True
 
         return path
-    
+
     @staticmethod
     def reduce_points(points, n):
+        points = np.array(points)
         if n >= len(points):
-            return points
+            return points.tolist()
 
         step = (len(points) - 1) / (n - 1)
-        indices = [round(i * step) for i in range(n - 1)]
-        indices.append(len(points) - 1)
+        indices = np.unique(np.round(np.arange(n - 1) * step).astype(int))
+        indices = np.append(indices, len(points) - 1)
+        indices = np.unique(indices)
 
-        indices = sorted(set(indices))
+        reduced = points[indices]
+        return reduced.tolist()
 
-        return [points[i] for i in indices]
-    
     @staticmethod
-    def save_points(points, filename="saved_points.txt"):
-        with open("C:\\Users\\msgaf\\Desktop\\saved_points.txt", "w") as f:
+    def select_dxf_file(folder):
+        files = sorted(f for f in os.listdir(folder) if f.endswith(".dxf"))
+        if not files:
+            raise FileNotFoundError("No DXF files found.")
+
+        print("\nAvailable DXF files:")
+        for i, file in enumerate(files):
+            print(f"{i + 1}: {file}")
+
+        index = int(input("Enter the number of the DXF file to load: ")) - 1
+        return os.path.join(folder, files[index])
+
+    @staticmethod
+    def save_points(points, dxf_filename, folder):
+        os.makedirs(folder, exist_ok=True)
+        base_name = "_" + pathlib.Path(dxf_filename).stem
+        filename = f"{base_name}_{len(points)}.txt"
+        full_path = os.path.join(folder, filename)
+
+        with open(full_path, "w") as f:
             f.write("x\ty\n")
             for x, y in points:
                 f.write(f"{x:.3f}\t{y:.3f}\n")
 
-"""
-
-OLD STUFF
-
-# Filter out points that within threshold motor steps of previous point
-def filter_low_step_points(points, currentTheta1, currentTheta2, min_steps_threshold):
-    filtered_points = []
-    prev_theta1 = currentTheta1
-    prev_theta2 = currentTheta2
-
-    for x, y in points:
-        t1, t2 = ik(x, y)
-        delta1 = t1 - prev_theta1
-        delta2 = t2 - prev_theta2
-        steps1 = int(round(delta1 / DEGREES_PER_STEP))
-        steps2 = int(round(delta2 / DEGREES_PER_STEP))
-
-        if abs(steps1) + abs(steps2) >= min_steps_threshold:
-            filtered_points.append((x, y))
-            prev_theta1 = t1
-            prev_theta2 = t2
-
-    return filtered_points
-
-# Repeat filter_zero_step_points until point set is within a reasonable size
-def filter_until_target_point_qty(points, theta1, theta2, max_size, initial_threshold=0, increment=1):
-    threshold = initial_threshold
-    filtered = filter_low_step_points(points, theta1, theta2, threshold)
-    while len(filtered) > max_size:
-        threshold += increment
-        filtered = filter_low_step_points(points, theta1, theta2, threshold)
-    print(f"Final min_steps_threshold: {threshold}")
-    return filtered
-
-def save_points(points, filename="saved_points.txt"):
-    with open("C:\\Users\\msgaf\\Desktop\\saved_points.txt", "w") as f:
-        f.write("x\ty\n")
-        for x, y in points:
-            f.write(f"{x:.3f}\t{y:.3f}\n")
-"""
+        print(f"\nSaved points to: {full_path}")
