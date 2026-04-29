@@ -1,9 +1,11 @@
 import ezdxf
 import time
 import os
+import matplotlib
+matplotlib.use('QtAgg')
 import matplotlib.pyplot as plt
 
-from Constants import Constants as c
+from Constants import Constants as c 
 from paths.PathProcessor import PathProcessor as p
 from robots.FiveBar import FiveBar
 from robots.Spooler import Spooler

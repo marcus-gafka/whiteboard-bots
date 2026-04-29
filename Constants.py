@@ -1,4 +1,4 @@
 class Constants:
     # File paths
-    TXT_FOLDER = "C:/Users/msgaf/Desktop/robot-artists/whiteboard-bots/.TXTS"
-    DXF_FOLDER = "C:/Users/msgaf/Desktop/robot-artists/whiteboard-bots/.DXFS"
+    TXT_FOLDER = "/home/msgafka/Desktop/whiteboard-bots/.TXTS"
+    DXF_FOLDER = "/home/msgafka/Desktop/whiteboard-bots/.DXFS"
