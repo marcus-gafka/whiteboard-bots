@@ -1,0 +1,2 @@
+x	y	theta1	theta2	steps1	steps2	interval
+2.787	3.383	-161.596	-245.093	1839	2789	8170

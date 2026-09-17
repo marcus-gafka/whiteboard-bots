@@ -76,9 +76,12 @@ def main():
 
         if temp_input == "0":
             preselection = True
-        else:
+        elif temp_input in {"1", "2", "3"}:
             robot_mode = temp_input
             temp_input = "1"
+        else:
+            print("Invalid input.")
+            continue
         
         if robot_mode == "1":
             robot = FiveBar()
@@ -87,8 +90,8 @@ def main():
         elif robot_mode == "3":
             robot = TwoLink()
         else:
-            print("Invalid robot selected.")
-            return
+            print("Invalid input.")
+            continue
 
         # =======================
         # Input selection
@@ -99,8 +102,8 @@ def main():
             print("2 - Run from saved TXT coordinates")
             input_mode = input("Enter 1 or 2: ").strip()
             if input_mode not in {"1", "2"}:
-                print("Invalid mode.")
-                return
+                print("Invalid input.")
+                continue
 
         # =======================
         # Load points / trajectory
@@ -138,7 +141,18 @@ def main():
 
             # --- Filter points ---
             user_input = input("Enter desired quantity of points (blank = all): ").strip()
-            filtered_points = ordered_all_points if user_input == "" else p.reduce_points(ordered_all_points, int(user_input))
+            if user_input == "":
+                filtered_points = ordered_all_points
+            else:
+                try:
+                    n = int(user_input)
+                    if n < 1 or n > len(ordered_all_points):
+                        print(f"Invalid input.")
+                        continue
+                    filtered_points = p.reduce_points(ordered_all_points, n)
+                except ValueError:
+                    print("Invalid input.")
+                    continue
             print(f"Total points after filtering: {len(filtered_points)}")
 
             # --- Save points ---

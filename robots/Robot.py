@@ -73,18 +73,15 @@ class Robot:
         return -steps1, -steps2, interval
     
     def is_singular(self, theta1_deg, theta2_deg, tol=1e-6):
-        tip = self.fk(theta1_deg, theta2_deg)["tip"]
-        J = self.jacobian(tip[0], tip[1])
+        J = self.jacobian(theta1_deg, theta2_deg)
         sigma_min = np.linalg.svd(J, compute_uv=False)[-1]
         return sigma_min < tol
 
     def mobility(self, theta1_deg, theta2_deg):
-        tip = self.fk(theta1_deg, theta2_deg)["tip"]
-        J = self.jacobian(tip[0], tip[1])
+        J = self.jacobian(theta1_deg, theta2_deg)
         return np.linalg.matrix_rank(J)
 
     def manipulability(self, theta1_deg, theta2_deg):
-        tip = self.fk(theta1_deg, theta2_deg)["tip"]
-        J = self.jacobian(tip[0], tip[1])
+        J = self.jacobian(theta1_deg, theta2_deg)
         return math.sqrt(np.linalg.det(J @ J.T))
 

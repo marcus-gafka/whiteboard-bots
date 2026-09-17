@@ -100,15 +100,15 @@ class PathProcessor:
         return geometries, lines, circles, arcs, polylines
 
     @staticmethod
-    def scale_and_translate_geometries(cls, geometries):
+    def scale_and_translate_geometries(robot, geometries):
         all_points = np.vstack([np.array(geometry) for geometry in geometries])
         min_x, max_x, min_y, max_y = PathProcessor.get_bounding_box(all_points)
         width = max_x - min_x
         height = max_y - min_y
 
-        scale_factor = (cls.DRAWABLE_WIDTH / width) if (height < r.get_aspect_ratio(cls) * width) else (cls.DRAWABLE_HEIGHT / height)
-        tx = cls.DRAWABLE_WIDTH / 2 - ((min_x + max_x) / 2) * scale_factor
-        ty = cls.DRAWABLE_HEIGHT / 2 - ((min_y + max_y) / 2) * scale_factor
+        scale_factor = (robot.DRAWABLE_WIDTH / width) if (height < r.get_aspect_ratio(robot) * width) else (robot.DRAWABLE_HEIGHT / height)
+        tx = robot.DRAWABLE_WIDTH / 2 - ((min_x + max_x) / 2) * scale_factor
+        ty = robot.DRAWABLE_HEIGHT / 2 - ((min_y + max_y) / 2) * scale_factor
 
         scaled_translated = []
         for geometry in geometries:

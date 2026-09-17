@@ -1,4 +1,6 @@
+import os
+
 class Constants:
-    # File paths
-    TXT_FOLDER = "C:/Users/msgaf/Desktop/robot-artists/whiteboard-bots/.TXTS"
-    DXF_FOLDER = "C:/Users/msgaf/Desktop/robot-artists/whiteboard-bots/.DXFS"
+    _BASE = os.path.dirname(os.path.abspath(__file__))
+    TXT_FOLDER = os.path.join(_BASE, ".TXTS")
+    DXF_FOLDER = os.path.join(_BASE, ".DXFS")

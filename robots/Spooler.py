@@ -77,10 +77,19 @@ class Spooler(Robot):
             "l2": l2
         }
     
-    def jacobian(self, x, y):
+    def jacobian(self, theta1_deg, theta2_deg):
 
-        l1 = self.calc_l1(x, y)
-        l2 = self.calc_l2(x, y)
+        # Convert angles back to cable lengths to get tip position
+        l1 = self.ORIGIN_L1 + (theta1_deg * math.pi * self.SPOOL_DIAMETER) / 360
+        l2 = self.ORIGIN_L2 + (theta2_deg * math.pi * self.SPOOL_DIAMETER) / 360
+
+        d = self.SPOOL_DISTANCE
+        x = (l1**2 - l2**2 + d**2) / (2 * d)
+        y_sq = l1**2 - x**2
+        if y_sq < 0:
+            return np.zeros((2, 2))
+        y = -math.sqrt(y_sq)
+
         S = self.SPOOL_DISTANCE
         D = self.SPOOL_DIAMETER
 
