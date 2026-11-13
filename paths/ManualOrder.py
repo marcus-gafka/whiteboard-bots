@@ -80,6 +80,15 @@ class ManualOrderState:
         if placements:
             self.history.append(("batch", ids))
 
+    def flip(self, piece_id):
+        """Reverse the drawing direction of an already placed piece."""
+        for i, (pid, reverse) in enumerate(self.placed_order):
+            if pid == piece_id:
+                self.placed_order[i] = (pid, not reverse)
+                self.history.append(("flip", piece_id))
+                return
+        raise ManualOrderError("Only placed pieces can be reversed.")
+
     def cut(self, piece_id, idx):
         """Split a pooled piece after point index `idx`. Returns the two new ids."""
         self._require_pooled(piece_id)
@@ -105,7 +114,7 @@ class ManualOrderState:
         return self.cut(piece_id, nearest_point_index(self.all_pieces[piece_id], point))
 
     def undo(self):
-        """Reverts the last place, batch place or cut. Returns the kind undone."""
+        """Reverts the last place, batch place, flip or cut. Returns the kind undone."""
         if not self.history:
             raise ManualOrderError("Nothing to undo.")
         kind, *rest = self.history.pop()
@@ -114,6 +123,10 @@ class ManualOrderState:
             for pid, _ in self.placed_order[-count:]:
                 self.pool_ids.add(pid)
             del self.placed_order[-count:]
+        elif kind == "flip":
+            (piece_id,) = rest
+            i = next(i for i, (pid, _) in enumerate(self.placed_order) if pid == piece_id)
+            self.placed_order[i] = (piece_id, not self.placed_order[i][1])
         else:  # "cut"
             parent_id, child_a, child_b = rest
             for child in (child_a, child_b):

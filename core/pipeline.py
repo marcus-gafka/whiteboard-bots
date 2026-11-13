@@ -1,11 +1,18 @@
-"""Web-app processing pipeline: DXF -> board-fitted, ordered points ->
-trajectory, plus the linkage poses the preview draws.
+"""Processing pipeline, in two robot-independent / robot-specific halves:
+
+1. Trajectory generation (no robot): DXF -> pieces in the DXF's own units ->
+   ordered, oriented pieces. Ordering starts from drawing_start().
+2. Robot planning: ordered pieces -> fitted to a robot's board -> reduced
+   path -> IK + (steps1, steps2, interval) commands, plus the linkage poses
+   the preview draws.
 
 Pure with respect to I/O (no HTTP, no files); failures are raised as
 PipelineError with a message fit to show a user.
 """
 
 import io
+import json
+import re
 
 import ezdxf
 from ezdxf import recover
@@ -28,12 +35,9 @@ class PipelineError(Exception):
     """A user-facing processing failure (bad file, nothing drawable, ...)."""
 
 
-def make_robot(name):
-    try:
-        return ROBOTS[name]()
-    except KeyError:
-        raise PipelineError(f"Unknown robot '{name}'. Choose one of: {', '.join(ROBOTS)}")
-
+# ---------------------------------------------------------------------------
+# 1. Trajectory generation (robot-independent, DXF units)
+# ---------------------------------------------------------------------------
 
 def read_dxf(data):
     """Parse DXF bytes. Uses ezdxf's recover mode, which tolerates the minor
@@ -54,18 +58,91 @@ def extract(doc, spacing=dxf_extraction.INITIAL_SPACING):
         skipped = ", ".join(sorted(counts["skipped"])) or "none"
         raise PipelineError("No drawable LINE, CIRCLE, ARC, POLYLINE, SPLINE or ELLIPSE entities found in "
                             f"the DXF (unsupported entities present: {skipped}).")
+    min_x, max_x, min_y, max_y = geometry_transform.get_bounding_box(flatten(geometries))
+    if max_x - min_x <= 0 and max_y - min_y <= 0:
+        raise PipelineError("Drawing has zero size; nothing to draw.")
     return geometries, counts
 
 
-def fit_to_robot(robot, geometries):
+def bounds(geometries):
+    """[min_x, min_y, max_x, max_y] of all points."""
     min_x, max_x, min_y, max_y = geometry_transform.get_bounding_box(flatten(geometries))
-    if max_x - min_x <= 0 and max_y - min_y <= 0:
-        raise PipelineError("Drawing has zero size; nothing to scale onto the board.")
-    return geometry_transform.scale_and_translate_geometries(robot, geometries)
+    return [float(min_x), float(min_y), float(max_x), float(max_y)]
+
+
+def drawing_start(geometries):
+    """Where the pen starts while ordering, without knowing the robot: the
+    drawing's bottom-left bounding-box corner. Every robot's home is its
+    board's bottom-left corner and drawings are centred on the board, so this
+    is where home ends up relative to the drawing on any robot."""
+    x0, y0, _, _ = bounds(geometries)
+    return (x0, y0)
+
+
+def auto_order(geometries):
+    return path_ordering.tsp_geometry_order(drawing_start(geometries), geometries)
 
 
 def flatten(geometries):
     return [tuple(pt) for g in geometries for pt in g]
+
+
+def parse_points(text):
+    """Pieces from an imported points file, already in draw order.
+
+    - JSON: a saved trajectory ({"pieces": [...]}), a list of pieces, or a
+      single list of [x, y] points.
+    - Text (.txt / .csv): one point per line, x and y as the first two
+      columns (comma, tab, space or semicolon separated). Lines that don't
+      start with two numbers (headers, comments) are skipped; a blank line
+      starts a new piece. The web app's steps .txt export also works.
+    """
+    text = text.strip()
+    if text[:1] in "[{":
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                data = data["pieces"]
+            if data and isinstance(data[0][0], (int, float)):
+                data = [data]
+            pieces = [[(float(p[0]), float(p[1])) for p in piece] for piece in data]
+        except (ValueError, KeyError, IndexError, TypeError) as e:
+            raise PipelineError(f"Not a usable points JSON file ({type(e).__name__}).")
+    else:
+        pieces = [[]]
+        for line in text.splitlines():
+            if not line.strip():
+                if pieces[-1]:
+                    pieces.append([])
+                continue
+            parts = re.split(r"[,\s;]+", line.strip())
+            try:
+                pieces[-1].append((float(parts[0]), float(parts[1])))
+            except (ValueError, IndexError):
+                continue
+    pieces = [p for p in pieces if len(p) >= 2]
+    if not pieces:
+        raise PipelineError("No points found. Expected lines of 'x, y' (blank lines separate pieces).")
+    x0, y0, x1, y1 = bounds(pieces)
+    if x1 - x0 <= 0 and y1 - y0 <= 0:
+        raise PipelineError("The points have zero extent; nothing to draw.")
+    return pieces
+
+
+# ---------------------------------------------------------------------------
+# 2. Robot planning
+# ---------------------------------------------------------------------------
+
+def make_robot(name):
+    try:
+        return ROBOTS[name]()
+    except KeyError:
+        raise PipelineError(f"Unknown robot '{name}'. Choose one of: {', '.join(ROBOTS)}")
+
+
+def fit_to_robot(robot, pieces):
+    """Scale the pieces (any units) to fill the robot's drawable board, centred."""
+    return geometry_transform.scale_and_translate_geometries(robot, pieces)
 
 
 def reduce(points, n=None):
@@ -102,6 +179,18 @@ def build_trajectory(robot, points):
         trajectory.append((x, y, t1, t2))
         current_t1, current_t2 = t1, t2
     return trajectory, commands
+
+
+def plan(robot, pieces, points=None):
+    """Ordered pieces (any units) -> everything needed to preview or run them
+    on `robot`. Commands are only built when every point is reachable."""
+    fitted = fit_to_robot(robot, pieces)
+    all_points = flatten(fitted)
+    path = reduce(all_points, points)
+    unreachable = find_unreachable(robot, path)
+    trajectory, commands = ([], []) if unreachable else build_trajectory(robot, path)
+    return {"fitted": fitted, "total_points": len(all_points), "path": path,
+            "unreachable": unreachable, "trajectory": trajectory, "commands": commands}
 
 
 def link_pose(robot, theta1_deg, theta2_deg, nd=3):

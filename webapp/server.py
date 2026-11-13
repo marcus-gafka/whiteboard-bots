@@ -4,14 +4,20 @@ Run from the repo root:
     .venv/bin/uvicorn webapp.server:app --reload
 then open http://127.0.0.1:8000
 
-This is the only front end: every trajectory is generated, previewed and
-sent to the robot (over USB serial, or the simulated port) through it.
+The web app is the only front end. Three pages, one per workflow step:
 
-Flow: POST /api/jobs (upload or sample) creates a job holding the board-fitted
-geometry. The client then either asks for an auto-ordered trajectory, or
-builds a manual order through /manual actions and asks for a trajectory from
-that, then starts a run. Jobs live in memory only (a single local user is the
-expected setup).
+1. Trajectory generator (/): load a DXF, order its pieces (auto, or manual
+   with cuts and flips) and save the ordered path as a trajectory, kept in
+   the DXF's own units so any robot can draw it at its own size.
+2. Robot preview (/preview): pick a saved trajectory (or import a points
+   file) and a robot. The path is fitted to that robot's board and turned
+   into steps1/steps2/interval commands, previewed with the moving linkage.
+   Nothing is sent to a robot from here.
+3. Live (/live): the only place a trajectory is sent to the robot, over USB
+   serial (or the simulated port), with run controls and status.
+
+Drawings being ordered live in memory (a single local user is the expected
+setup); saved trajectories are JSON files in TRAJECTORY_DIR.
 """
 
 import os
@@ -30,54 +36,25 @@ from Constants import Constants as c
 from comms.SerialComms import SerialComms
 from comms.SimulatedComms import SimulatedComms
 from core import pipeline
+from core import trajectory_store as store
 from core.runner import RobotRunner, RunnerBusy
 from paths import ManualOrder as manual_order
 from paths import PathOrdering as path_ordering
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+TRAJECTORY_DIR = c.TRAJECTORY_FOLDER
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
-MAX_JOBS = 16
+MAX_DRAWINGS = 16
 
-# Cap on points sent for piece outlines (display only; the actual drawn path
-# is controlled by the user's point count). Dense DXFs sample to hundreds of
-# thousands of points, which would bloat responses.
+# Cap on points sent for piece outlines (display only; never affects what is
+# saved or drawn). Dense DXFs sample to hundreds of thousands of points.
 MAX_DISPLAY_POINTS = 20000
 
 app = FastAPI(title="Whiteboard Bots")
 
 
-class Job:
-    def __init__(self, robot, source, counts, geometries):
-        self.id = uuid.uuid4().hex[:12]
-        self.robot = robot
-        self.source = source
-        self.counts = counts
-        self.geometries = geometries          # board-fitted, original DXF order
-        total = sum(len(g) for g in geometries)
-        self.stride = max(1, -(-total // MAX_DISPLAY_POINTS))  # ceil
-        self.manual = None                    # ManualOrderState, created on demand
-        self.lock = threading.Lock()
-
-
-JOBS = OrderedDict()
-JOBS_LOCK = threading.Lock()
-
-
-def _store(job):
-    with JOBS_LOCK:
-        JOBS[job.id] = job
-        while len(JOBS) > MAX_JOBS:
-            JOBS.popitem(last=False)
-
-
-def _get(job_id):
-    with JOBS_LOCK:
-        job = JOBS.get(job_id)
-        if job:
-            JOBS.move_to_end(job_id)
-    if job is None:
-        raise HTTPException(404, "Job not found. It may have expired; process the drawing again.")
-    return job
+def _stride(total_points):
+    return max(1, -(-total_points // MAX_DISPLAY_POINTS))  # ceil
 
 
 def _round_pts(points, nd=4):
@@ -91,14 +68,42 @@ def _display(points, stride):
     return _round_pts(points)
 
 
-def _board(bot):
-    return {"width": bot.DRAWABLE_WIDTH, "height": bot.DRAWABLE_HEIGHT, "start": list(bot.START_XY),
-            "robot": pipeline.robot_geometry(bot)}
+# ---------------------------------------------------------------------------
+# 1. Trajectory generator: drawings in DXF units
+# ---------------------------------------------------------------------------
+
+class Drawing:
+    def __init__(self, source, counts, geometries):
+        self.id = uuid.uuid4().hex[:12]
+        self.source = source
+        self.counts = counts
+        self.geometries = geometries          # DXF units, original entity order
+        self.bounds = pipeline.bounds(geometries)
+        self.start = pipeline.drawing_start(geometries)
+        self.stride = _stride(sum(len(g) for g in geometries))
+        self.manual = None                    # ManualOrderState, created on demand
+        self.lock = threading.Lock()
 
 
-@app.get("/api/robots")
-def list_robots():
-    return [{"name": name, **_board(cls())} for name, cls in pipeline.ROBOTS.items()]
+DRAWINGS = OrderedDict()
+DRAWINGS_LOCK = threading.Lock()
+
+
+def _store_drawing(drawing):
+    with DRAWINGS_LOCK:
+        DRAWINGS[drawing.id] = drawing
+        while len(DRAWINGS) > MAX_DRAWINGS:
+            DRAWINGS.popitem(last=False)
+
+
+def _get_drawing(drawing_id):
+    with DRAWINGS_LOCK:
+        drawing = DRAWINGS.get(drawing_id)
+        if drawing:
+            DRAWINGS.move_to_end(drawing_id)
+    if drawing is None:
+        raise HTTPException(404, "Drawing not found. It may have expired; load it again.")
+    return drawing
 
 
 @app.get("/api/samples")
@@ -108,16 +113,10 @@ def list_samples():
     return sorted(f for f in os.listdir(c.DXF_FOLDER) if f.lower().endswith(".dxf"))
 
 
-@app.post("/api/jobs")
-async def create_job(
-    robot: str = Form(...),
-    sample: str | None = Form(None),
-    file: UploadFile | None = File(None),
-):
-    """Upload a DXF (or name a bundled sample); fit it to the robot's board."""
+@app.post("/api/drawings")
+async def create_drawing(sample: str | None = Form(None), file: UploadFile | None = File(None)):
+    """Upload a DXF (or name a bundled sample) and extract its pieces."""
     try:
-        bot = pipeline.make_robot(robot)
-
         if file is not None:
             data = await file.read(MAX_UPLOAD_BYTES + 1)
             if len(data) > MAX_UPLOAD_BYTES:
@@ -134,147 +133,216 @@ async def create_job(
                 data = f.read()
         else:
             raise pipeline.PipelineError("Upload a DXF file or choose a sample.")
-
         geometries, counts = pipeline.extract(pipeline.read_dxf(data))
-        fitted = pipeline.fit_to_robot(bot, geometries)
     except pipeline.PipelineError as e:
         raise HTTPException(400, str(e))
 
-    job = Job(bot, source, counts, fitted)
-    _store(job)
+    drawing = Drawing(source, counts, geometries)
+    _store_drawing(drawing)
     return {
-        "job": job.id,
+        "drawing": drawing.id,
         "source": source,
-        "robot": bot.name,
-        "board": _board(bot),
         "counts": counts,
-        "piece_count": len(fitted),
+        "bounds": drawing.bounds,
+        "start": list(drawing.start),
+        "piece_count": len(geometries),
+        "total_points": sum(len(g) for g in geometries),
     }
 
 
-# ---------------------------------------------------------------------------
-# Trajectory
-# ---------------------------------------------------------------------------
-
-class TrajectoryRequest(BaseModel):
+class OrderRequest(BaseModel):
     mode: Literal["auto", "manual"] = "auto"
-    points: int | None = None
 
 
-def _compute(job, mode, points):
-    """Ordered pieces -> reduced path -> IK trajectory. Returns a dict of the
-    intermediate results; raises HTTPException on user errors."""
-    bot = job.robot
-    with job.lock:
+def _ordered(drawing, mode):
+    with drawing.lock:
         if mode == "manual":
-            if job.manual is None or not job.manual.is_complete:
-                raise HTTPException(400, "Place every piece before generating a manual-order trajectory.")
-            ordered = job.manual.ordered_path()
-        else:
-            ordered = path_ordering.tsp_geometry_order(bot, job.geometries)
-    try:
-        all_points = pipeline.flatten(ordered)
-        path = pipeline.reduce(all_points, points)
-    except pipeline.PipelineError as e:
-        raise HTTPException(400, str(e))
-    unreachable = pipeline.find_unreachable(bot, path)
-    traj, commands = ([], []) if unreachable else pipeline.build_trajectory(bot, path)
-    return {"ordered": ordered, "all_points": all_points, "path": path,
-            "unreachable": unreachable, "trajectory": traj, "commands": commands}
+            if drawing.manual is None or not drawing.manual.is_complete:
+                raise HTTPException(400, "Place every piece before using the manual order.")
+            return drawing.manual.ordered_path()
+    return pipeline.auto_order(drawing.geometries)
 
 
-@app.post("/api/jobs/{job_id}/trajectory")
-def trajectory(job_id: str, req: TrajectoryRequest):
-    job = _get(job_id)
-    bot = job.robot
-    r = _compute(job, req.mode, req.points)
-    return {
-        "mode": req.mode,
-        "points_requested": req.points,
-        "source": job.source,
-        "robot": bot.name,
-        "board": _board(bot),
-        "total_points": len(r["all_points"]),
-        "pieces": [_display(g, job.stride) for g in r["ordered"]],
-        "path": _round_pts(r["path"]),
-        "unreachable": r["unreachable"],
-        "rows": [
-            [round(x, 3), round(y, 3), round(t1, 3), round(t2, 3), s1, s2, iv]
-            for (x, y, t1, t2), (s1, s2, iv) in zip(r["trajectory"], r["commands"])
-        ],
-        "duration_ms": sum(cmd[2] for cmd in r["commands"]),
-        **dict(zip(("poses", "pose_stride"), pipeline.trajectory_poses(bot, r["trajectory"]))),
-    }
+@app.post("/api/drawings/{drawing_id}/order")
+def order(drawing_id: str, req: OrderRequest):
+    """The ordered pieces (display-decimated) for previewing an order."""
+    drawing = _get_drawing(drawing_id)
+    return {"mode": req.mode, "pieces": [_display(p, drawing.stride) for p in _ordered(drawing, req.mode)]}
 
-
-# ---------------------------------------------------------------------------
-# Manual ordering
-# ---------------------------------------------------------------------------
 
 class ManualAction(BaseModel):
-    action: Literal["place", "cut", "undo", "reset", "autofinish"]
+    action: Literal["place", "cut", "flip", "undo", "reset", "autofinish"]
     piece: int | None = None
     reverse: bool = False
     point: tuple[float, float] | None = None
 
 
-def _manual_state(job, include_pieces=None):
+def _manual_state(drawing, include_pieces=None):
     """include_pieces: None = every live piece, else an iterable of ids."""
-    st = job.manual
+    st = drawing.manual
     ids = st.all_pieces.keys() if include_pieces is None else include_pieces
-    pen = st.pen_position(job.robot.START_XY)
     return {
         "pool": sorted(st.pool_ids),
         "placed": [[pid, rev] for pid, rev in st.placed_order],
         "complete": st.is_complete,
         "can_undo": bool(st.history),
-        "pen": list(pen),
-        "pose": pipeline.pose_at(job.robot, *pen),
-        "pieces": {str(pid): _display(st.all_pieces[pid], job.stride) for pid in ids},
+        "pen": list(st.pen_position(drawing.start)),
+        "pieces": {str(pid): _display(st.all_pieces[pid], drawing.stride) for pid in ids},
         "roots": {str(pid): st.root_of[pid] for pid in ids},
         "cuttable": [pid for pid in st.pool_ids if manual_order.cuttable(st.all_pieces[pid])],
     }
 
 
-@app.get("/api/jobs/{job_id}/manual")
-def manual_get(job_id: str):
-    job = _get(job_id)
-    with job.lock:
-        job.manual = job.manual or manual_order.ManualOrderState(job.geometries)
-        return _manual_state(job)
+@app.get("/api/drawings/{drawing_id}/manual")
+def manual_get(drawing_id: str):
+    drawing = _get_drawing(drawing_id)
+    with drawing.lock:
+        drawing.manual = drawing.manual or manual_order.ManualOrderState(drawing.geometries)
+        return _manual_state(drawing)
 
 
-@app.post("/api/jobs/{job_id}/manual")
-def manual_act(job_id: str, act: ManualAction):
-    job = _get(job_id)
-    with job.lock:
-        st = job.manual = job.manual or manual_order.ManualOrderState(job.geometries)
+@app.post("/api/drawings/{drawing_id}/manual")
+def manual_act(drawing_id: str, act: ManualAction):
+    drawing = _get_drawing(drawing_id)
+    with drawing.lock:
+        st = drawing.manual = drawing.manual or manual_order.ManualOrderState(drawing.geometries)
         new_ids = []
         try:
             if act.action == "place":
                 st.place(_need(act.piece, "piece"), act.reverse)
+            elif act.action == "flip":
+                st.flip(_need(act.piece, "piece"))
             elif act.action == "cut":
                 point = _need(act.point, "point")
                 new_ids = list(st.cut_at_point(_need(act.piece, "piece"), point))
             elif act.action == "undo":
                 st.undo()
             elif act.action == "reset":
-                job.manual = manual_order.ManualOrderState(job.geometries)
-                return _manual_state(job)
+                drawing.manual = manual_order.ManualOrderState(drawing.geometries)
+                return _manual_state(drawing)
             elif act.action == "autofinish":
                 pool = sorted(st.pool_ids)
-                order = path_ordering.tsp_order_indices(
-                    st.pen_position(job.robot.START_XY), [st.all_pieces[pid] for pid in pool])
-                st.place_many([(pool[i], rev) for i, rev in order])
+                seq = path_ordering.tsp_order_indices(
+                    st.pen_position(drawing.start), [st.all_pieces[pid] for pid in pool])
+                st.place_many([(pool[i], rev) for i, rev in seq])
         except manual_order.ManualOrderError as e:
             raise HTTPException(400, str(e))
-        return _manual_state(job, include_pieces=new_ids)
+        return _manual_state(drawing, include_pieces=new_ids)
 
 
 def _need(value, name):
     if value is None:
         raise HTTPException(422, f"'{name}' is required for this action.")
     return value
+
+
+# ---------------------------------------------------------------------------
+# Saved trajectories
+# ---------------------------------------------------------------------------
+
+class SaveRequest(BaseModel):
+    drawing: str
+    mode: Literal["auto", "manual"] = "auto"
+    name: str | None = None
+
+
+@app.post("/api/trajectories")
+def save_trajectory(req: SaveRequest):
+    drawing = _get_drawing(req.drawing)
+    pieces = _ordered(drawing, req.mode)
+    name = (req.name or "").strip()[:80] or f"{drawing.source} ({req.mode})"
+    return store.save(TRAJECTORY_DIR, name=name, source=drawing.source, mode=req.mode,
+                      pieces=pieces, bounds=drawing.bounds)
+
+
+@app.post("/api/trajectories/import")
+async def import_trajectory(file: UploadFile = File(...), name: str | None = Form(None)):
+    """Save an uploaded points file (see pipeline.parse_points) as a trajectory."""
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    try:
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise pipeline.PipelineError("File is larger than 20 MB.")
+        pieces = pipeline.parse_points(data.decode("utf-8", errors="replace"))
+    except pipeline.PipelineError as e:
+        raise HTTPException(400, str(e))
+    source = os.path.splitext(os.path.basename(file.filename or "points"))[0]
+    name = (name or "").strip()[:80] or f"{source} (imported)"
+    return store.save(TRAJECTORY_DIR, name=name, source=source, mode="imported",
+                      pieces=pieces, bounds=pipeline.bounds(pieces))
+
+
+@app.get("/api/trajectories")
+def list_trajectories():
+    return store.list_meta(TRAJECTORY_DIR)
+
+
+def _load_trajectory(tid):
+    try:
+        return store.load(TRAJECTORY_DIR, tid)
+    except store.TrajectoryNotFound:
+        raise HTTPException(404, "Trajectory not found.")
+
+
+@app.delete("/api/trajectories/{tid}")
+def delete_trajectory(tid: str):
+    try:
+        store.delete(TRAJECTORY_DIR, tid)
+    except store.TrajectoryNotFound:
+        raise HTTPException(404, "Trajectory not found.")
+    return {"deleted": tid}
+
+
+# ---------------------------------------------------------------------------
+# 2. Robot preview: fit a trajectory to a robot and compute its commands
+# ---------------------------------------------------------------------------
+
+def _board(bot):
+    return {"width": bot.DRAWABLE_WIDTH, "height": bot.DRAWABLE_HEIGHT, "start": list(bot.START_XY),
+            "robot": pipeline.robot_geometry(bot)}
+
+
+@app.get("/api/robots")
+def list_robots():
+    return [{"name": name, **_board(cls())} for name, cls in pipeline.ROBOTS.items()]
+
+
+class PlanRequest(BaseModel):
+    robot: str
+    points: int | None = None
+
+
+def _plan(tid, robot_name, points):
+    """Returns (meta, robot, plan); raises HTTPException on user errors."""
+    meta, pieces = _load_trajectory(tid)
+    try:
+        bot = pipeline.make_robot(robot_name)
+        return meta, bot, pipeline.plan(bot, pieces, points)
+    except pipeline.PipelineError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/trajectories/{tid}/plan")
+def plan_trajectory(tid: str, req: PlanRequest):
+    meta, bot, p = _plan(tid, req.robot, req.points)
+    stride = _stride(p["total_points"])
+    poses, pose_stride = pipeline.trajectory_poses(bot, p["trajectory"])
+    return {
+        "trajectory": meta,
+        "robot": bot.name,
+        "points_requested": req.points,
+        "board": _board(bot),
+        "total_points": p["total_points"],
+        "pieces": [_display(g, stride) for g in p["fitted"]],
+        "path": _round_pts(p["path"]),
+        "unreachable": p["unreachable"],
+        "rows": [
+            [round(x, 3), round(y, 3), round(t1, 3), round(t2, 3), s1, s2, iv]
+            for (x, y, t1, t2), (s1, s2, iv) in zip(p["trajectory"], p["commands"])
+        ],
+        "duration_ms": sum(cmd[2] for cmd in p["commands"]),
+        "poses": poses,
+        "pose_stride": pose_stride,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +377,8 @@ class PortRequest(BaseModel):
 
 
 class RunRequest(PortRequest):
-    job: str
-    mode: Literal["auto", "manual"] = "auto"
+    trajectory: str
+    robot: str
     points: int | None = None
 
 
@@ -321,18 +389,17 @@ def run_status():
 
 @app.post("/api/run")
 def run_start(req: RunRequest):
-    job = _get(req.job)
     if not RUNNER.status()["at_home"]:
         raise HTTPException(409, "The pen isn't at home (the last run didn't finish). "
                                  "Return it home or confirm it's there before starting.")
-    r = _compute(job, req.mode, req.points)
-    if r["unreachable"]:
-        raise HTTPException(400, f"{len(r['unreachable'])} point(s) are outside {job.robot.name}'s reach.")
-    meta = {"kind": "draw", "job": job.id, "mode": req.mode, "points": req.points,
-            "robot": job.robot.name, "source": job.source, "port": req.port}
+    meta, bot, p = _plan(req.trajectory, req.robot, req.points)
+    if p["unreachable"]:
+        raise HTTPException(400, f"{len(p['unreachable'])} point(s) are outside {bot.name}'s reach.")
+    run_meta = {"kind": "draw", "trajectory": meta["id"], "name": meta["name"], "robot": bot.name,
+                "points": req.points, "port": req.port}
     try:
-        RUNNER.start(r["commands"], [(t1, t2) for _, _, t1, t2 in r["trajectory"]],
-                     _open_comms(req.port, req.baud), job.robot.name, meta)
+        RUNNER.start(p["commands"], [(t1, t2) for _, _, t1, t2 in p["trajectory"]],
+                     _open_comms(req.port, req.baud), bot.name, run_meta)
     except RunnerBusy as e:
         raise HTTPException(409, str(e))
     return RUNNER.status()
@@ -384,9 +451,22 @@ def run_mark_home():
     return RUNNER.status()
 
 
-@app.get("/")
-def index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+# ---------------------------------------------------------------------------
+# Pages
+# ---------------------------------------------------------------------------
 
+@app.get("/")
+def generator_page():
+    return FileResponse(os.path.join(STATIC_DIR, "generator.html"))
+
+
+@app.get("/preview")
+def preview_page():
+    return FileResponse(os.path.join(STATIC_DIR, "preview.html"))
+
+
+@app.get("/live")
+def live_page():
+    return FileResponse(os.path.join(STATIC_DIR, "live.html"))
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

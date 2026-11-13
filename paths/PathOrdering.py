@@ -46,9 +46,11 @@ def tsp_order_indices(start_xy, geometries):
     return order
 
 
-def tsp_geometry_order(robot, geometries):
+def tsp_geometry_order(start_xy, geometries):
+    """The geometries in nearest-neighbour order from `start_xy`, each oriented
+    in the direction it will be drawn."""
     return [list(reversed(geometries[i])) if rev else geometries[i]
-            for i, rev in tsp_order_indices(robot.START_XY, geometries)]
+            for i, rev in tsp_order_indices(start_xy, geometries)]
 
 
 def reduce_points(points, n):

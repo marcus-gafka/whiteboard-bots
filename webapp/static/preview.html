@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot Preview · Whiteboard Bots</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="app">
+  <aside>
+    <h1>Whiteboard Bots</h1>
+    <nav class="steps">
+      <a href="/">1 · Trajectory generator</a>
+      <a href="/preview" aria-current="page">2 · Robot preview</a>
+      <a href="/live">3 · Live</a>
+    </nav>
+
+    <label class="field">Trajectory
+      <div class="row">
+        <select id="trajectory"></select>
+        <button id="deleteTraj" title="Delete this saved trajectory" aria-label="Delete this saved trajectory">✕</button>
+      </div>
+    </label>
+    <div class="field">
+      <button id="importBtn" title="x, y per line (blank line = new piece), or a trajectory .json">Import points…</button>
+      <span class="hint">.txt / .csv with x, y per line (a blank line starts a new piece), or a trajectory .json</span>
+      <input id="importFile" type="file" accept=".txt,.csv,.json,text/plain,application/json" hidden>
+    </div>
+    <label class="field">Robot
+      <select id="robot"></select>
+    </label>
+    <label class="field">Point count <span class="hint">Leave blank to keep every point (can be 100k+)</span>
+      <input id="points" type="number" min="2" step="1" placeholder="all" value="1000">
+    </label>
+
+    <div id="error" class="error" hidden></div>
+    <dl id="stats" class="stats" hidden></dl>
+    <button id="download" hidden>Download steps .txt</button>
+
+  </aside>
+
+  <main>
+    <div class="topbar">
+      <div class="legend">
+        <span class="lg-path">Drawn</span>
+        <span class="lg-conn">Pen-down travel between pieces</span>
+        <span class="lg-dir">› Drawing direction</span>
+        <span class="lg-home">★ Home</span>
+        <span class="lg-robot">Robot linkage</span>
+      </div>
+      <label class="robot-toggle"><input type="checkbox" id="showRobot" checked> Show robot</label>
+    </div>
+
+    <div class="stage" id="stage"><p class="empty">Loading…</p></div>
+
+    <div class="player" id="player" hidden>
+      <button id="play">Play</button>
+      <input id="scrub" type="range" min="0" value="0" aria-label="Playback position">
+      <select id="speed" title="Playback speed" aria-label="Playback speed">
+        <option value="1">1×</option><option value="5">5×</option>
+        <option value="20" selected>20×</option><option value="100">100×</option>
+      </select>
+    </div>
+  </main>
+</div>
+<script src="/static/common.js"></script>
+<script src="/static/preview.js"></script>
+</body>
+</html>

@@ -5,7 +5,6 @@ import pytest
 from Constants import Constants as c
 from core import pipeline
 from paths import GeometryTransform as geometry_transform
-from paths import PathOrdering as path_ordering
 
 
 def _dxf_bytes(name):
@@ -24,23 +23,39 @@ def test_read_dxf_rejects_garbage():
         pipeline.read_dxf(b"this is not a dxf")
 
 
-def test_full_pipeline_fits_drawing_inside_board():
-    robot = pipeline.make_robot("Spooler")
+def test_ordering_happens_in_dxf_units_and_any_robot_can_plan_it():
     geometries, counts = pipeline.extract(pipeline.read_dxf(_dxf_bytes("box.dxf")))
     assert counts["lines"] == 4
+    ordered = pipeline.auto_order(geometries)
+    # Ordering doesn't rescale: the pieces keep the DXF's own coordinates.
+    assert pipeline.bounds(ordered) == pipeline.bounds(geometries)
+    assert pipeline.flatten(ordered)[0] == pytest.approx(pipeline.drawing_start(geometries), abs=1e-9)
 
-    fitted = pipeline.fit_to_robot(robot, geometries)
-    min_x, max_x, min_y, max_y = geometry_transform.get_bounding_box(pipeline.flatten(fitted))
-    eps = 1e-6
-    assert min_x >= -eps and max_x <= robot.DRAWABLE_WIDTH + eps
-    assert min_y >= -eps and max_y <= robot.DRAWABLE_HEIGHT + eps
+    for name in pipeline.ROBOTS:
+        robot = pipeline.make_robot(name)
+        p = pipeline.plan(robot, ordered, 50)
+        min_x, max_x, min_y, max_y = geometry_transform.get_bounding_box(pipeline.flatten(p["fitted"]))
+        eps = 1e-6
+        assert min_x >= -eps and max_x <= robot.DRAWABLE_WIDTH + eps
+        assert min_y >= -eps and max_y <= robot.DRAWABLE_HEIGHT + eps
+        assert len(p["path"]) == len(p["trajectory"]) == len(p["commands"]) == 50
+        assert p["unreachable"] == []
 
-    ordered = path_ordering.tsp_geometry_order(robot, fitted)
-    points = pipeline.reduce(pipeline.flatten(ordered), 50)
-    assert len(points) == 50
 
-    trajectory, commands = pipeline.build_trajectory(robot, points)
-    assert len(trajectory) == len(commands) == 50
+def test_plan_keeps_the_saved_order():
+    # Two strokes ordered right-to-left on purpose; planning must not reorder them.
+    pieces = [[(10.0, 0.0), (8.0, 0.0)], [(2.0, 0.0), (0.0, 2.0)]]
+    p = pipeline.plan(pipeline.make_robot("Spooler"), pieces)
+    xs = [x for x, _ in p["path"]]
+    assert xs[0] > xs[1] > xs[2]
+
+
+def test_extract_rejects_zero_size_drawing():
+    import ezdxf
+    doc = ezdxf.new()
+    doc.modelspace().add_line((1, 1), (1, 1))
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.extract(doc)
 
 
 def test_reduce_none_keeps_everything_and_rejects_tiny_counts():
@@ -92,3 +107,20 @@ def test_trajectory_poses_follow_the_pen_and_respect_the_cap():
 
 def test_pose_at_unreachable_point_is_none():
     assert pipeline.pose_at(pipeline.make_robot("FiveBar"), 500.0, 500.0) is None
+
+
+def test_parse_points_text_with_header_and_pieces():
+    text = "x\ty\n0, 0\n1 0\n\n\n5;5\n6\t6\n7 7 extra columns ignored\n# comment\n"
+    assert pipeline.parse_points(text) == [[(0, 0), (1, 0)], [(5, 5), (6, 6), (7, 7)]]
+
+
+def test_parse_points_json_forms():
+    assert pipeline.parse_points('{"meta": {}, "pieces": [[[0, 0], [1, 1]]]}') == [[(0, 0), (1, 1)]]
+    assert pipeline.parse_points("[[0, 0], [2, 1]]") == [[(0, 0), (2, 1)]]
+    assert pipeline.parse_points("[[[0, 0], [2, 1]], [[3, 3], [4, 4]]]") == [[(0, 0), (2, 1)], [(3, 3), (4, 4)]]
+
+
+@pytest.mark.parametrize("bad", ["", "hello\nworld", "1 1\n1 1", "{not json", '{"x": 1}', "[[0, 0]]"])
+def test_parse_points_rejects_unusable_input(bad):
+    with pytest.raises(pipeline.PipelineError):
+        pipeline.parse_points(bad)

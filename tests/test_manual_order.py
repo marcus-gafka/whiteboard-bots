@@ -82,3 +82,19 @@ def test_state_place_many_is_one_undo_step():
     assert st.pool_ids == {0, 1} and st.placed_order == [] and not st.history
     with pytest.raises(mo.ManualOrderError):
         st.place_many([(0, False), (0, True)])
+
+
+def test_state_flip_reverses_a_placed_piece_and_undoes():
+    st = _state()
+    st.place(0)
+    st.place(1)
+    assert st.pen_position((9, 9)) == (13, 0)
+    st.flip(1)
+    assert st.placed_order == [(0, False), (1, True)]
+    assert st.ordered_path()[1] == [(13, 0), (12, 0), (11, 0), (10, 0)]
+    assert st.pen_position((9, 9)) == (10, 0)
+    assert st.undo() == "flip"
+    assert st.placed_order == [(0, False), (1, False)]
+    with pytest.raises(mo.ManualOrderError):
+        _state().flip(0)          # still in the pool
+

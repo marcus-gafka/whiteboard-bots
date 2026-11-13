@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live · Whiteboard Bots</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="app">
+  <aside>
+    <h1>Whiteboard Bots</h1>
+    <nav class="steps">
+      <a href="/">1 · Trajectory generator</a>
+      <a href="/preview">2 · Robot preview</a>
+      <a href="/live" aria-current="page">3 · Live</a>
+    </nav>
+
+    <label class="field">Trajectory
+      <select id="trajectory"></select>
+    </label>
+    <label class="field">Robot
+      <select id="robot"></select>
+    </label>
+    <label class="field">Point count <span class="hint">Leave blank to keep every point (can be 100k+)</span>
+      <input id="points" type="number" min="2" step="1" placeholder="all" value="1000">
+    </label>
+
+    <section class="panel">
+      <h2>Send to robot</h2>
+      <label class="field">Port
+        <div class="row">
+          <select id="port"></select>
+          <button id="refreshPorts" title="Rescan serial ports" aria-label="Rescan serial ports">↻</button>
+        </div>
+      </label>
+      <label class="field">Baud rate
+        <input id="baud" type="number" min="300" step="1" value="9600">
+      </label>
+
+      <div id="runBox" hidden>
+        <div class="runstate"><b id="runState"></b><span id="runCount"></span></div>
+        <div class="bar" style="margin-top:6px"><div id="runBar"></div></div>
+      </div>
+      <div id="runError" class="error" hidden></div>
+
+      <div class="warn" id="homeBox" hidden>
+        <span id="homeText"></span>
+        <div class="row">
+          <button id="runHome" class="grow" title="Moves straight back to home. The pen can't lift, so this draws a line.">Return pen home</button>
+          <button id="markHome" class="grow" title="Use this if you moved the pen to home by hand.">It's at home</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <button id="runStart" class="primary grow">Start drawing</button>
+        <button id="runPause" hidden>Pause</button>
+        <button id="runStop" hidden>Stop</button>
+      </div>
+      <p class="note">Stop and pause take effect after the current move finishes. Make sure the pen is at home before starting.</p>
+    </section>
+  </aside>
+
+  <main>
+    <!-- Live view of the robot's current state: not built yet. -->
+    <div class="stage"><p class="empty">No robot connected</p></div>
+  </main>
+</div>
+<script src="/static/common.js"></script>
+<script src="/static/live.js"></script>
+</body>
+</html>

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trajectory Generator · Whiteboard Bots</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="app">
+  <aside>
+    <h1>Whiteboard Bots</h1>
+    <nav class="steps">
+      <a href="/" aria-current="page">1 · Trajectory generator</a>
+      <a href="/preview">2 · Robot preview</a>
+      <a href="/live">3 · Live</a>
+    </nav>
+
+    <div class="field">
+      <div id="drop" class="drop" tabindex="0">
+        <strong id="dropName">Drop a .dxf here</strong>
+        or click to browse
+      </div>
+      <input id="file" type="file" accept=".dxf" hidden>
+    </div>
+    <div class="or">or</div>
+    <label class="field">Sample drawing
+      <select id="sample"><option value="">—</option></select>
+    </label>
+
+    <button id="load" class="primary" disabled>Load drawing</button>
+
+    <div id="error" class="error" hidden></div>
+    <dl id="stats" class="stats" hidden></dl>
+
+    <section class="panel" id="savePanel" hidden>
+      <h2>Save trajectory</h2>
+      <p class="note">Saved in the drawing's own units, so the robot preview can scale it to any robot.</p>
+      <label class="field">Name
+        <input id="saveName" type="text" maxlength="80">
+      </label>
+      <button id="save" class="primary">Save trajectory</button>
+      <div id="saved" class="ok" hidden></div>
+    </section>
+  </aside>
+
+  <main>
+    <div class="topbar">
+      <div class="tabs" role="tablist" id="tabs" hidden>
+        <button role="tab" data-mode="auto" aria-selected="true">Auto order</button>
+        <button role="tab" data-mode="manual" aria-selected="false">Manual order</button>
+      </div>
+      <div class="legend">
+        <span class="lg-path">Drawn</span>
+        <span class="lg-pool" id="lgPool" hidden>Not yet placed</span>
+        <span class="lg-conn">Pen-down travel between pieces</span>
+        <span class="lg-dir">› Drawing direction</span>
+        <span class="lg-home">★ Start (drawing's bottom-left corner)</span>
+      </div>
+    </div>
+
+    <div class="toolbar" id="toolbar" hidden>
+      <button id="toolPlace" aria-pressed="true" title="Click a piece to add it next. It starts from the end nearest your click.">Place<kbd>P</kbd></button>
+      <button id="toolCut" aria-pressed="false" title="Click a point on a piece to split it in two there.">Cut<kbd>C</kbd></button>
+      <button id="toolFlip" aria-pressed="false" title="Click a placed piece to reverse the direction it is drawn in.">Flip<kbd>F</kbd></button>
+      <span class="sep"></span>
+      <button id="undo">Undo<kbd>Ctrl Z</kbd></button>
+      <button id="autofinish" title="Order the remaining pieces automatically, starting from the current pen position.">Auto-finish rest</button>
+      <button id="reset">Reset</button>
+      <span class="grow"></span>
+      <span class="progress" id="progress"></span>
+    </div>
+
+    <div class="toolbar" id="autoBar" hidden>
+      <button id="editAuto" title="Copy this order into the manual editor to flip or reorder pieces.">Edit this order (flip / reorder)</button>
+    </div>
+
+    <div class="stage" id="stage"><p class="empty">Choose a drawing and press Load drawing.</p></div>
+  </main>
+</div>
+<script src="/static/common.js"></script>
+<script src="/static/generator.js"></script>
+</body>
+</html>
