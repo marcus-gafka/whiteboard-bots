@@ -22,9 +22,9 @@
   * { box-sizing: border-box; }
   body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
          background: var(--bg); color: var(--text); }
-  .app { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; }
+  .app { display: grid; grid-template-columns: 300px 1fr; height: 100vh; }
   aside { background: var(--panel); border-right: 1px solid var(--border); padding: 20px;
-          display: flex; flex-direction: column; gap: 16px; }
+          display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
   h1 { font-size: 17px; margin: 0; }
   label.field { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 13px; }
   .hint { font-weight: 400; color: var(--muted); font-size: 12px; }
@@ -74,9 +74,24 @@
   .editor[data-tool=place] .hit.pool { cursor: pointer; }
   .editor[data-tool=cut] .hit.pool { cursor: crosshair; }
   .editor[data-tool=cut] .hit.pool.nocut { cursor: not-allowed; }
+  .panel { border-top: 1px solid var(--border); padding-top: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .panel h2 { font-size: 14px; margin: 0; }
+  .row { display: flex; gap: 8px; }
+  .row > select, .row > input { flex: 1; min-width: 0; }
+  .row > button.grow { flex: 1; }
+  .runstate { font-size: 13px; display: flex; justify-content: space-between; gap: 8px;
+              font-variant-numeric: tabular-nums; }
+  .runstate b { text-transform: capitalize; }
+  .bar { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s linear; }
+  .note { font-size: 12px; color: var(--muted); margin: 0; }
+  .warn { background: var(--accent-soft); padding: 10px 12px; border-radius: 6px; font-size: 13px;
+          display: flex; flex-direction: column; gap: 8px; }
   [hidden] { display: none !important; }
+  main { overflow: hidden; }
   @media (max-width: 760px) {
-    .app { grid-template-columns: 1fr; }
+    .app { grid-template-columns: 1fr; height: auto; }
+    main { overflow: visible; }
     aside { border-right: 0; border-bottom: 1px solid var(--border); }
   }
 </style>
@@ -111,6 +126,40 @@
     <div id="error" class="error" hidden></div>
     <dl id="stats" class="stats" hidden></dl>
     <button id="download" hidden>Download trajectory .txt</button>
+
+    <section class="panel" id="robotPanel" hidden>
+      <h2>Send to robot</h2>
+      <label class="field">Port
+        <div class="row">
+          <select id="port"></select>
+          <button id="refreshPorts" title="Rescan serial ports" aria-label="Rescan serial ports">↻</button>
+        </div>
+      </label>
+      <label class="field">Baud rate
+        <input id="baud" type="number" min="300" step="1" value="9600">
+      </label>
+
+      <div id="runBox" hidden>
+        <div class="runstate"><b id="runState"></b><span id="runCount"></span></div>
+        <div class="bar" style="margin-top:6px"><div id="runBar"></div></div>
+      </div>
+      <div id="runError" class="error" hidden></div>
+
+      <div class="warn" id="homeBox" hidden>
+        <span id="homeText"></span>
+        <div class="row">
+          <button id="runHome" class="grow" title="Moves straight back to home. The pen can't lift, so this draws a line.">Return pen home</button>
+          <button id="markHome" class="grow" title="Use this if you moved the pen to home by hand.">It's at home</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <button id="runStart" class="primary grow">Start drawing</button>
+        <button id="runPause" hidden>Pause</button>
+        <button id="runStop" hidden>Stop</button>
+      </div>
+      <p class="note">Stop and pause take effect after the current move finishes. Make sure the pen is at home (★) before starting.</p>
+    </section>
   </aside>
 
   <main>
@@ -258,7 +307,10 @@ function setFile(f) {
   if (f) $("sample").value = "";
   updateLoad();
 }
-function updateLoad() { $("load").disabled = app.busy || !(app.chosenFile || $("sample").value); }
+function updateLoad() {
+  const running = !!run && ACTIVE.has(run.state);  // `run`/ACTIVE are defined in the robot section below
+  $("load").disabled = app.busy || running || !(app.chosenFile || $("sample").value);
+}
 
 $("drop").onclick = () => $("file").click();
 $("drop").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
@@ -335,6 +387,8 @@ function setChrome({ editor }) {
   $("lgPool").hidden = !editor;
   $("player").hidden = editor || !(app.result && app.result.rows.length);
   $("download").hidden = editor || !(app.result && app.result.rows.length);
+  $("robotPanel").hidden = editor || !(app.result && app.result.rows.length);
+  if (!$("robotPanel").hidden) { if (!$("port").options.length) loadPorts(); renderRun(); }
 }
 
 // ---------------------------------------------------------------- preview
@@ -581,7 +635,94 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// ---------------------------------------------------------------- robot
+let run = null;          // last /api/run status
+let pollTimer = 0;
+const ACTIVE = new Set(["connecting", "running", "paused", "stopping"]);
+
+async function loadPorts() {
+  try {
+    const prev = $("port").value;
+    const ports = await api("GET", "/api/ports");
+    $("port").innerHTML = ports.map(p =>
+      `<option value="${p.device}">${p.device === "simulated" ? p.description : `${p.device} — ${p.description}`}</option>`).join("");
+    if (ports.some(p => p.device === prev)) $("port").value = prev;
+  } catch (e) { showRunError(e.message); }
+}
+$("refreshPorts").onclick = loadPorts;
+
+function showRunError(msg) { $("runError").textContent = msg || ""; $("runError").hidden = !msg; }
+
+// The run shown is "ours" if it's drawing exactly what's on screen.
+function runMatchesPreview(s) {
+  const r = app.result, m = s?.meta || {};
+  return r && m.kind === "draw" && app.job && m.job === app.job.job && m.mode === r.mode &&
+         (m.points ?? null) === (r.points_requested ?? null);
+}
+
+async function pollRun() {
+  clearTimeout(pollTimer);
+  try { run = await api("GET", "/api/run"); } catch { run = null; }
+  renderRun();
+  if (run && ACTIVE.has(run.state)) pollTimer = setTimeout(pollRun, 300);
+}
+
+function renderRun() {
+  const s = run;
+  const active = !!s && ACTIVE.has(s.state);
+  const showBox = !!s && s.state !== "idle";
+  $("runBox").hidden = !showBox;
+  if (showBox) {
+    const what = s.meta.kind === "home" ? "Returning home" :
+                 `${s.meta.source} (${s.meta.mode})`;
+    $("runState").textContent = s.state === "done" && s.meta.kind === "home" ? "At home" : s.state;
+    $("runCount").textContent = `${what} · ${s.index.toLocaleString()} / ${s.total.toLocaleString()}`;
+    $("runBar").style.width = s.total ? `${(100 * s.index / s.total).toFixed(1)}%` : "0";
+  }
+  showRunError(s?.state === "error" ? s.error : "");
+
+  const notHome = s && !s.at_home && !active;
+  $("homeBox").hidden = !notHome;
+  if (notHome) $("homeText").textContent =
+    `The pen isn't at home (the last ${s.position_robot} run ${s.state === "done" ? "ended at the drawing's last point" : "didn't finish"}). ` +
+    `A new drawing assumes it starts at home.`;
+
+  $("runStart").hidden = active;
+  $("runStart").disabled = !app.result?.rows.length || notHome;
+  if (app.result?.rows.length) $("runStart").textContent =
+    `Start drawing (${app.result.rows.length.toLocaleString()} moves, ~${fmtDuration(app.result.duration_ms)})`;
+  $("runPause").hidden = !active || s.state === "connecting" || s.state === "stopping";
+  $("runPause").textContent = s?.state === "paused" ? "Resume" : "Pause";
+  $("runStop").hidden = !active;
+  $("runStop").disabled = s?.state === "stopping";
+  for (const id of ["port", "baud", "refreshPorts", "runHome", "markHome", "robot"]) $(id).disabled = active;
+  for (const b of $("tabs").querySelectorAll("button")) b.disabled = active;
+  updateLoad();
+
+  // Mirror live progress onto the preview when it's drawing what's shown,
+  // including the final position on the poll where the run finishes.
+  if ((active || wasActive) && runMatchesPreview(s) && anim.drawn) { stop(); setProgress(s.index); }
+  // Keep the controls in view when a run starts or needs attention.
+  if ((active && !wasActive) || (notHome && wasActive)) $("robotPanel").scrollIntoView({ block: "nearest" });
+  wasActive = active;
+}
+let wasActive = false;
+
+async function runAction(path, body) {
+  try { run = await api("POST", path, body); showRunError(""); }
+  catch (e) { showRunError(e.message); }
+  pollRun();
+}
+const portBody = () => ({ port: $("port").value, baud: Number($("baud").value) || 9600 });
+$("runStart").onclick = () => runAction("/api/run", {
+  job: app.job.job, mode: app.result.mode, points: app.result.points_requested, ...portBody() });
+$("runPause").onclick = () => runAction(run?.state === "paused" ? "/api/run/resume" : "/api/run/pause");
+$("runStop").onclick = () => runAction("/api/run/stop");
+$("runHome").onclick = () => runAction("/api/run/home", portBody());
+$("markHome").onclick = () => runAction("/api/run/mark-home");
+
 init();
+pollRun();
 </script>
 </body>
 </html>

@@ -108,3 +108,51 @@ def test_manual_errors_are_400():
 
 def test_index_served():
     assert "Whiteboard Bots" in client.get("/").text
+
+
+def _wait_run(states, timeout=10):
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        s = client.get("/api/run").json()
+        if s["state"] in states:
+            return s
+        time.sleep(0.05)
+    raise AssertionError(client.get("/api/run").json())
+
+
+def test_ports_always_include_simulated():
+    assert {"device": "simulated", "description": "Simulated (no robot)"} in client.get("/api/ports").json()
+
+
+def test_simulated_run_stop_then_home_gate():
+    from webapp import server
+    server.RUNNER.mark_home()
+    jid = _job(robot="TwoLink", sample="box.dxf")["job"]
+
+    res = client.post("/api/run", json={"job": jid, "mode": "auto", "points": 40, "port": "simulated"})
+    assert res.status_code == 200, res.text
+    assert res.json()["total"] == 40
+    _wait_run({"running"})
+    # A second start while running is refused.
+    assert client.post("/api/run", json={"job": jid, "port": "simulated"}).status_code == 409
+
+    client.post("/api/run/stop")
+    s = _wait_run({"stopped", "done"})
+    if s["state"] == "stopped":
+        assert not s["at_home"]
+        # Can't start a new drawing until the pen is home.
+        assert client.post("/api/run", json={"job": jid, "port": "simulated"}).status_code == 409
+        assert client.post("/api/run/home", json={"port": "simulated"}).status_code == 200
+        s = _wait_run({"done"})
+        assert s["at_home"] and s["meta"]["kind"] == "home"
+    assert client.post("/api/run/home", json={"port": "simulated"}).status_code == 400
+
+
+def test_manual_run_requires_complete_order():
+    from webapp import server
+    server.RUNNER.mark_home()
+    jid = _job()["job"]
+    client.get(f"/api/jobs/{jid}/manual")
+    res = client.post("/api/run", json={"job": jid, "mode": "manual", "port": "simulated"})
+    assert res.status_code == 400

@@ -29,6 +29,22 @@ and press **Load drawing**.
   - **Generate trajectory** when every piece is placed. The sidebar shows pen-down travel
     between pieces so you can compare against the auto order.
 
+### Sending to the robot (USB serial)
+
+Once a trajectory preview is showing, use **Send to robot** in the sidebar. Pick the port
+(only USB serial devices are listed; ↻ rescans) and baud rate (default 9600), then
+**Start drawing**. Pause and Stop take effect after the move in progress.
+
+- The protocol is unchanged: one `steps1 steps2 interval` line per move, and the firmware
+  replies `DONE`. If no `DONE` arrives within the move's duration plus 5 s, the run stops
+  with an error.
+- Every drawing assumes the pen starts at home (★). After a run ends or is stopped, the app
+  blocks the next one until you **Return pen home** (moves straight back, which draws a line
+  because the pen can't lift) or confirm **It's at home**.
+- **Simulated (no robot)** runs the same flow in real time without hardware.
+- **Linux:** your user needs serial access:
+  `sudo usermod -aG dialout $USER`, then log out and back in.
+
 ## CLI
 
 ```bash

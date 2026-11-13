@@ -18,7 +18,7 @@ class PsuedoComms(CommsBase):
         self.verbose = verbose
         self.command_count = 0
 
-    def send_steps(self, steps1, steps2, interval):
+    def send_steps(self, steps1, steps2, interval, timeout=None):
         self.command_count += 1
 
         if self.verbose:

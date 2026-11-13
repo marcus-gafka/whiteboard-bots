@@ -20,9 +20,13 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from serial.tools import list_ports as serial_list_ports
 
 from Constants import Constants as c
+from comms.PsuedoComms import PsuedoComms
+from comms.SerialComms import SerialComms
 from core import pipeline
+from core.runner import RobotRunner, RunnerBusy
 from paths import ManualOrder as manual_order
 from paths import PathOrdering as path_ordering
 
@@ -156,41 +160,48 @@ class TrajectoryRequest(BaseModel):
     points: int | None = None
 
 
-@app.post("/api/jobs/{job_id}/trajectory")
-def trajectory(job_id: str, req: TrajectoryRequest):
-    job = _get(job_id)
+def _compute(job, mode, points):
+    """Ordered pieces -> reduced path -> IK trajectory. Returns a dict of the
+    intermediate results; raises HTTPException on user errors."""
     bot = job.robot
     with job.lock:
-        if req.mode == "manual":
+        if mode == "manual":
             if job.manual is None or not job.manual.is_complete:
                 raise HTTPException(400, "Place every piece before generating a manual-order trajectory.")
             ordered = job.manual.ordered_path()
         else:
             ordered = pipeline.auto_order(bot, job.geometries)
-
     try:
         all_points = pipeline.flatten(ordered)
-        path = pipeline.reduce(all_points, req.points)
+        path = pipeline.reduce(all_points, points)
     except pipeline.PipelineError as e:
         raise HTTPException(400, str(e))
-
     unreachable = pipeline.find_unreachable(bot, path)
     traj, commands = ([], []) if unreachable else pipeline.build_trajectory(bot, path)
+    return {"ordered": ordered, "all_points": all_points, "path": path,
+            "unreachable": unreachable, "trajectory": traj, "commands": commands}
 
+
+@app.post("/api/jobs/{job_id}/trajectory")
+def trajectory(job_id: str, req: TrajectoryRequest):
+    job = _get(job_id)
+    bot = job.robot
+    r = _compute(job, req.mode, req.points)
     return {
         "mode": req.mode,
+        "points_requested": req.points,
         "source": job.source,
         "robot": bot.name,
         "board": _board(bot),
-        "total_points": len(all_points),
-        "pieces": [_display(g, job.stride) for g in ordered],
-        "path": _round_pts(path),
-        "unreachable": unreachable,
+        "total_points": len(r["all_points"]),
+        "pieces": [_display(g, job.stride) for g in r["ordered"]],
+        "path": _round_pts(r["path"]),
+        "unreachable": r["unreachable"],
         "rows": [
             [round(x, 3), round(y, 3), round(t1, 3), round(t2, 3), s1, s2, iv]
-            for (x, y, t1, t2), (s1, s2, iv) in zip(traj, commands)
+            for (x, y, t1, t2), (s1, s2, iv) in zip(r["trajectory"], r["commands"])
         ],
-        "duration_ms": sum(cmd[2] for cmd in commands),
+        "duration_ms": sum(cmd[2] for cmd in r["commands"]),
     }
 
 
@@ -263,6 +274,115 @@ def _need(value, name):
     if value is None:
         raise HTTPException(422, f"'{name}' is required for this action.")
     return value
+
+
+# ---------------------------------------------------------------------------
+# Sending to the robot
+# ---------------------------------------------------------------------------
+
+SIMULATED_PORT = "simulated"
+RUNNER = RobotRunner()
+
+
+def _open_comms(port, baud):
+    if port == SIMULATED_PORT:
+        return lambda: PsuedoComms(simulate_delay=True, verbose=False)
+    return lambda: SerialComms(port, baud)
+
+
+@app.get("/api/ports")
+def list_ports():
+    """USB serial devices (legacy /dev/ttyS* entries without hardware info
+    are hidden), plus a simulated port for trying the flow without a robot."""
+    found = [
+        {"device": p.device, "description": p.description if p.description != "n/a" else p.device}
+        for p in sorted(serial_list_ports.comports(), key=lambda p: p.device)
+        if p.hwid and p.hwid != "n/a"
+    ]
+    return found + [{"device": SIMULATED_PORT, "description": "Simulated (no robot)"}]
+
+
+class RunRequest(BaseModel):
+    job: str
+    mode: Literal["auto", "manual"] = "auto"
+    points: int | None = None
+    port: str
+    baud: int = c.DEFAULT_SERIAL_BAUD
+
+
+class PortRequest(BaseModel):
+    port: str
+    baud: int = c.DEFAULT_SERIAL_BAUD
+
+
+@app.get("/api/run")
+def run_status():
+    return RUNNER.status()
+
+
+@app.post("/api/run")
+def run_start(req: RunRequest):
+    job = _get(req.job)
+    if not RUNNER.status()["at_home"]:
+        raise HTTPException(409, "The pen isn't at home (the last run didn't finish). "
+                                 "Return it home or confirm it's there before starting.")
+    r = _compute(job, req.mode, req.points)
+    if r["unreachable"]:
+        raise HTTPException(400, f"{len(r['unreachable'])} point(s) are outside {job.robot.name}'s reach.")
+    meta = {"kind": "draw", "job": job.id, "mode": req.mode, "points": req.points,
+            "robot": job.robot.name, "source": job.source, "port": req.port}
+    try:
+        RUNNER.start(r["commands"], [(t1, t2) for _, _, t1, t2 in r["trajectory"]],
+                     _open_comms(req.port, req.baud), job.robot.name, meta)
+    except RunnerBusy as e:
+        raise HTTPException(409, str(e))
+    return RUNNER.status()
+
+
+@app.post("/api/run/pause")
+def run_pause():
+    RUNNER.pause()
+    return RUNNER.status()
+
+
+@app.post("/api/run/resume")
+def run_resume():
+    RUNNER.resume()
+    return RUNNER.status()
+
+
+@app.post("/api/run/stop")
+def run_stop():
+    RUNNER.stop()
+    return RUNNER.status()
+
+
+@app.post("/api/run/home")
+def run_home(req: PortRequest):
+    """Move from the last recorded position straight back to home. The pen
+    can't lift, so this draws a line on the board."""
+    pos = RUNNER.position()
+    if pos is None:
+        raise HTTPException(400, "The pen is already at home.")
+    robot_name, t1, t2 = pos
+    bot = pipeline.make_robot(robot_name)
+    home = bot.ik(*bot.START_XY)
+    command = bot.calc_steps(t1, t2, *home)
+    try:
+        RUNNER.start([command], [home], _open_comms(req.port, req.baud), robot_name,
+                     {"kind": "home", "robot": robot_name, "port": req.port}, ends_at_home=True)
+    except RunnerBusy as e:
+        raise HTTPException(409, str(e))
+    return RUNNER.status()
+
+
+@app.post("/api/run/mark-home")
+def run_mark_home():
+    try:
+        RUNNER.mark_home()
+    except RunnerBusy as e:
+        raise HTTPException(409, str(e))
+    return RUNNER.status()
 
 
 @app.get("/")
