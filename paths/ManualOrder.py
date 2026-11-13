@@ -80,19 +80,24 @@ def build_ordered_path(all_pieces, placed_order):
     return path
 
 
-class ManualOrderSession:
-    """Holds all state for one interactive cut/reorder run and drives its
-    command loop + live plot. Construct and call run() once; use the
-    module-level prompt_manual_order() convenience function otherwise."""
+class ManualOrderError(ValueError):
+    """An invalid place/cut/undo request (unknown piece, bad cut point, ...).
+    The message is suitable to show the user directly."""
 
-    def __init__(self, geometries, robot):
-        self.robot = robot
+
+class ManualOrderState:
+    """UI-independent state for building a draw order by hand.
+
+    Pieces are identified by stable integer ids (never reused). The original
+    geometries get ids 0..n-1; each cut retires its parent and creates two
+    new ids. `pool_display` maps pooled ids to short compact labels for UIs
+    that need typed references (the CLI); the web UI just uses ids.
+    """
+
+    def __init__(self, geometries):
         n = len(geometries)
-        colors = pick_colors(n)
-
         self.next_id = n
         self.all_pieces = {i: geometries[i] for i in range(n)}
-        self.colors_by_root = {i: colors[i] for i in range(n)}
         self.root_of = {i: i for i in range(n)}
         self.child_path = {i: () for i in range(n)}
         self.pool_ids = set(range(n))
@@ -100,10 +105,129 @@ class ManualOrderSession:
         self.placed_order = []
         self.history = []
 
+    @property
+    def is_complete(self):
+        return not self.pool_ids
+
+    def id_for_label(self, label):
+        piece_id = self.pool_reverse.get(str(label))
+        if piece_id is None:
+            raise ManualOrderError(f"'{label}' is not an available geometry number.")
+        return piece_id
+
+    def _require_pooled(self, piece_id):
+        if piece_id not in self.pool_ids:
+            raise ManualOrderError(f"Piece {piece_id} is not in the pool.")
+
+    def place(self, piece_id, reverse=False):
+        self._require_pooled(piece_id)
+        pool_label = self.pool_display.pop(piece_id)
+        del self.pool_reverse[pool_label]
+        self.pool_ids.discard(piece_id)
+        self.placed_order.append((piece_id, bool(reverse)))
+        self.history.append(("place", piece_id, bool(reverse), pool_label))
+
+    def place_many(self, placements):
+        """Place several (piece_id, reverse) pairs as a single undoable step."""
+        ids = [pid for pid, _ in placements]
+        if len(set(ids)) != len(ids):
+            raise ManualOrderError("A piece can only be placed once.")
+        for pid in ids:
+            self._require_pooled(pid)
+        entries = []
+        for pid, reverse in placements:
+            self.place(pid, reverse)
+            entries.append(self.history.pop())
+        if entries:
+            self.history.append(("batch", entries))
+
+    def check_cuttable(self, piece_id):
+        self._require_pooled(piece_id)
+        if not cuttable(self.all_pieces[piece_id]):
+            raise ManualOrderError("That piece is too short to cut further.")
+
+    def cut(self, piece_id, idx):
+        """Split a pooled piece after point index `idx`. Returns the two new ids."""
+        self.check_cuttable(piece_id)
+        points = self.all_pieces[piece_id]
+        lo, hi = valid_cut_index_range(points)
+        if idx < lo or idx > hi:
+            raise ManualOrderError("Cut point too close to an end of the piece — pick a point further inside.")
+
+        piece_a, piece_b = split_piece(points, idx)
+        id_a, id_b = self.next_id, self.next_id + 1
+        self.next_id += 2
+        for child, pts, branch in ((id_a, piece_a, 0), (id_b, piece_b, 1)):
+            self.all_pieces[child] = pts
+            self.root_of[child] = self.root_of[piece_id]
+            self.child_path[child] = self.child_path[piece_id] + (branch,)
+            self.pool_ids.add(child)
+        self.pool_ids.discard(piece_id)
+        self.pool_display, self.pool_reverse = renumber_pool(self.pool_ids)
+        self.history.append(("cut", piece_id, id_a, id_b))
+        return id_a, id_b
+
+    def cut_at_point(self, piece_id, point):
+        self.check_cuttable(piece_id)
+        return self.cut(piece_id, nearest_point_index(self.all_pieces[piece_id], point))
+
+    def undo(self):
+        """Reverts the last place or cut. Returns the kind undone."""
+        if not self.history:
+            raise ManualOrderError("Nothing to undo.")
+
+        kind, *rest = self.history.pop()
+        if kind == "batch":
+            (entries,) = rest
+            for entry in reversed(entries):
+                self.history.append(entry)
+                self.undo()
+        elif kind == "place":
+            piece_id, _reverse, label = rest
+            self.placed_order.pop()
+            self.pool_ids.add(piece_id)
+            self.pool_display[piece_id] = label
+            self.pool_reverse[label] = piece_id
+        else:  # "cut"
+            parent_id, child_a, child_b = rest
+            for child in (child_a, child_b):
+                self.pool_ids.discard(child)
+                del self.all_pieces[child]
+                del self.root_of[child]
+                del self.child_path[child]
+            self.pool_ids.add(parent_id)
+            # Pool membership is now exactly what it was right before the
+            # cut, so a fresh renumber deterministically reproduces the same
+            # labels it had then — no separate bookkeeping needed.
+            self.pool_display, self.pool_reverse = renumber_pool(self.pool_ids)
+        return kind
+
+    def pen_position(self, start_xy):
+        """Where the pen sits after the pieces placed so far."""
+        if not self.placed_order:
+            return tuple(start_xy)
+        piece_id, reverse = self.placed_order[-1]
+        points = self.all_pieces[piece_id]
+        return tuple(points[0] if reverse else points[-1])
+
+    def ordered_path(self):
+        return build_ordered_path(self.all_pieces, self.placed_order)
+
+
+class ManualOrderSession:
+    """CLI front end over ManualOrderState: typed commands + live matplotlib
+    plot. Construct and call run() once; use the module-level
+    prompt_manual_order() convenience function otherwise."""
+
+    def __init__(self, geometries, robot):
+        self.robot = robot
+        self.state = ManualOrderState(geometries)
+        colors = pick_colors(len(geometries))
+        self.colors_by_root = {i: colors[i] for i in range(len(geometries))}
         self.fig, self.ax = plt.subplots()
 
     def _color_for(self, piece_id):
-        return color_for_piece(piece_id, self.colors_by_root, self.root_of, self.child_path)
+        return color_for_piece(piece_id, self.colors_by_root, self.state.root_of, self.state.child_path)
 
     def _safe_redraw(self):
         try:
@@ -113,6 +237,7 @@ class ManualOrderSession:
             raise ManualOrderAborted()
 
     def _render(self, highlight_id=None):
+        st = self.state
         ax = self.ax
         ax.clear()
         ax.set_xlim(0, self.robot.DRAWABLE_WIDTH)
@@ -136,8 +261,8 @@ class ManualOrderSession:
         # Placed pieces are labeled by their fixed position in the draw order
         # (1..len(placed_order)) — this never needs renumbering since it's
         # just "which step is this," recomputed trivially from the list.
-        for i, (piece_id, reverse) in enumerate(self.placed_order):
-            points = self.all_pieces[piece_id]
+        for i, (piece_id, reverse) in enumerate(st.placed_order):
+            points = st.all_pieces[piece_id]
             points = list(reversed(points)) if reverse else points
             color = self._color_for(piece_id)
             ax.plot(*zip(*points), linestyle="-", color=color, linewidth=2)
@@ -149,56 +274,31 @@ class ManualOrderSession:
                     linestyle=":", color="black", linewidth=1.5)
             prev_point = points[-1]
 
-        for piece_id in sorted(self.pool_display, key=lambda pid: int(self.pool_display[pid])):
-            points = self.all_pieces[piece_id]
+        for piece_id in sorted(st.pool_display, key=lambda pid: int(st.pool_display[pid])):
+            points = st.all_pieces[piece_id]
             color = self._color_for(piece_id)
             is_highlighted = piece_id == highlight_id
             ax.plot(*zip(*points), linestyle="None", marker=".", markersize=(4 if is_highlighted else 2),
                     color=color, alpha=(0.95 if is_highlighted else (0.5 if highlight_id is None else 0.15)))
             ax.plot(*points[0], marker="^", color=color, markersize=9, linestyle="None")
             ax.plot(*points[-1], marker="s", markerfacecolor="none", markeredgecolor=color, markersize=7, linestyle="None")
-            ax.annotate(self.pool_display[piece_id], points[0], fontsize=10, fontweight="bold", color=color,
+            ax.annotate(st.pool_display[piece_id], points[0], fontsize=10, fontweight="bold", color=color,
                         xytext=(4, 4), textcoords="offset points")
 
         self._safe_redraw()
 
     def _cmd_undo(self):
-        if not self.history:
-            print("  Nothing to undo.")
-            return
-
-        kind, *rest = self.history.pop()
-        if kind == "place":
-            piece_id, _reverse, label = rest
-            self.placed_order.pop()
-            self.pool_ids.add(piece_id)
-            self.pool_display[piece_id] = label
-            self.pool_reverse[label] = piece_id
-        else:  # "cut"
-            parent_id, child_a, child_b = rest
-            self.pool_ids.discard(child_a)
-            self.pool_ids.discard(child_b)
-            del self.all_pieces[child_a]
-            del self.all_pieces[child_b]
-            del self.root_of[child_a]
-            del self.root_of[child_b]
-            del self.child_path[child_a]
-            del self.child_path[child_b]
-            self.pool_ids.add(parent_id)
-            # Pool membership is now exactly what it was right before the
-            # cut, so a fresh renumber deterministically reproduces the same
-            # labels it had then — no separate bookkeeping needed.
-            self.pool_display, self.pool_reverse = renumber_pool(self.pool_ids)
+        try:
+            self.state.undo()
+        except ManualOrderError as e:
+            print(f"  {e}")
 
     def _cmd_cut(self, label):
-        piece_id = self.pool_reverse.get(label)
-        if piece_id is None:
-            print(f"  '{label}' is not an available geometry number.")
-            return
-
-        points = self.all_pieces[piece_id]
-        if not cuttable(points):
-            print(f"  '{label}' is too short to cut further.")
+        try:
+            piece_id = self.state.id_for_label(label)
+            self.state.check_cuttable(piece_id)
+        except ManualOrderError as e:
+            print(f"  {e}")
             return
 
         self._render(highlight_id=piece_id)
@@ -213,47 +313,24 @@ class ManualOrderSession:
             print("  Cut cancelled.")
             return
 
-        idx = nearest_point_index(points, clicks[0])
-        lo, hi = valid_cut_index_range(points)
-        if idx < lo or idx > hi:
-            print("  Cut point too close to an end of the geometry — pick a point further inside.")
-            return
-
-        piece_a, piece_b = split_piece(points, idx)
-        id_a, id_b = self.next_id, self.next_id + 1
-        self.next_id += 2
-        self.all_pieces[id_a] = piece_a
-        self.all_pieces[id_b] = piece_b
-        self.root_of[id_a] = self.root_of[piece_id]
-        self.root_of[id_b] = self.root_of[piece_id]
-        self.child_path[id_a] = self.child_path[piece_id] + (0,)
-        self.child_path[id_b] = self.child_path[piece_id] + (1,)
-        self.pool_ids.discard(piece_id)
-        self.pool_ids.add(id_a)
-        self.pool_ids.add(id_b)
-        self.pool_display, self.pool_reverse = renumber_pool(self.pool_ids)
-        self.history.append(("cut", piece_id, id_a, id_b))
+        try:
+            self.state.cut_at_point(piece_id, clicks[0])
+        except ManualOrderError as e:
+            print(f"  {e}")
 
     def _cmd_place(self, token):
         reverse = token[-1:] in ("r", "R")
         label = token[:-1] if reverse else token
-        piece_id = self.pool_reverse.get(label)
-        if piece_id is None:
+        try:
+            self.state.place(self.state.id_for_label(label), reverse)
+        except ManualOrderError:
             print(f"  '{label}' is not a placeable geometry number right now.")
-            return
-
-        pool_label = self.pool_display[piece_id]
-        self.pool_ids.discard(piece_id)
-        del self.pool_display[piece_id]
-        del self.pool_reverse[pool_label]
-        self.placed_order.append((piece_id, reverse))
-        self.history.append(("place", piece_id, reverse, pool_label))
 
     def run(self):
         plt.ion()
         plt.show()
 
-        n = len(self.all_pieces)
+        n = len(self.state.all_pieces)
         print(f"\nBuild the draw order for {n} geometries one command at a time:")
         print("  <#>       place that geometry next")
         print("  <#>r      place it reversed")
@@ -262,13 +339,13 @@ class ManualOrderSession:
         print("  (pool numbers are reassigned to stay simple only when a cut changes the pool)")
 
         try:
-            while self.pool_ids:
+            while not self.state.is_complete:
                 if not plt.fignum_exists(self.fig.number):
                     raise ManualOrderAborted()
 
                 self._render()
-                remaining = sorted(self.pool_display.values(), key=int)
-                raw = input(f"  {len(self.placed_order)} placed, remaining {remaining}: ").strip()
+                remaining = sorted(self.state.pool_display.values(), key=int)
+                raw = input(f"  {len(self.state.placed_order)} placed, remaining {remaining}: ").strip()
                 if not raw:
                     continue
 
@@ -288,7 +365,7 @@ class ManualOrderSession:
             if plt.fignum_exists(self.fig.number):
                 plt.close(self.fig)
 
-        return build_ordered_path(self.all_pieces, self.placed_order)
+        return self.state.ordered_path()
 
 
 def prompt_manual_order(geometries, robot):

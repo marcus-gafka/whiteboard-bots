@@ -28,33 +28,34 @@ def geometry_distance(g1, g2):
     return min(candidates, key=lambda x: x[0])
 
 
-def tsp_geometry_order(robot, geometries):
+def tsp_order_indices(start_xy, geometries):
+    """Greedy nearest-neighbour draw order starting from the pen at
+    `start_xy`. Returns [(index_into_geometries, reversed), ...]."""
     n = len(geometries)
+    if n == 0:
+        return []
     visited = np.zeros(n, dtype=bool)
-    path = []
+    start = np.asarray(start_xy, dtype=float)
 
-    distances_to_start = np.array([geometry_dist_to_start(robot, g) for g in geometries])
-    current_index = np.argmin(distances_to_start)
-    current_geometry = geometries[current_index]
-    visited[current_index] = True
-
-    dist_to_start_first = dist_points(robot.START_XY, current_geometry[0])
-    dist_to_start_last = dist_points(robot.START_XY, current_geometry[-1])
-    if dist_to_start_first > dist_to_start_last:
-        current_geometry = list(reversed(current_geometry))
-
-    path.append(current_geometry)
-
-    # Vectorized form of calling geometry_distance(path[-1], g) for every
-    # unvisited g: same four candidate pairings, same tie-breaking (first
-    # candidate in that order, then lowest index), but O(n) numpy per step
-    # instead of O(n) Python calls — matters for DXFs with thousands of LINEs.
     starts = np.array([g[0] for g in geometries], dtype=float)
     ends = np.array([g[-1] for g in geometries], dtype=float)
 
+    # First piece: whichever has an endpoint closest to the pen, oriented to
+    # begin at the nearer end.
+    d_start = np.linalg.norm(starts - start, axis=1)
+    d_end = np.linalg.norm(ends - start, axis=1)
+    current = int(np.argmin(np.minimum(d_start, d_end)))
+    reversed_ = bool(d_start[current] > d_end[current])
+    order = [(current, reversed_)]
+    visited[current] = True
+
+    # Vectorized form of calling geometry_distance(prev, g) for every
+    # unvisited g: same four candidate pairings, same tie-breaking (first
+    # candidate in that order, then lowest index), but O(n) numpy per step
+    # instead of O(n) Python calls — matters for DXFs with thousands of LINEs.
     for _ in range(n - 1):
-        prev_start = np.asarray(path[-1][0], dtype=float)
-        prev_end = np.asarray(path[-1][-1], dtype=float)
+        idx, rev = order[-1]
+        prev_start, prev_end = (ends[idx], starts[idx]) if rev else (starts[idx], ends[idx])
         candidates = np.stack([
             np.linalg.norm(starts - prev_end, axis=1),    # end -> start
             np.linalg.norm(ends - prev_end, axis=1),      # end -> end (reverse next)
@@ -65,16 +66,16 @@ def tsp_geometry_order(robot, geometries):
         dists = candidates[np.arange(n), which]
         dists[visited] = np.inf
 
-        best_index = int(np.argmin(dists))
-        best_geom_reversed = bool(which[best_index] in (1, 3))
+        best = int(np.argmin(dists))
+        order.append((best, bool(which[best] in (1, 3))))
+        visited[best] = True
 
-        next_geom = geometries[best_index]
-        if best_geom_reversed:
-            next_geom = list(reversed(next_geom))
-        path.append(next_geom)
-        visited[best_index] = True
+    return order
 
-    return path
+
+def tsp_geometry_order(robot, geometries):
+    return [list(reversed(geometries[i])) if rev else geometries[i]
+            for i, rev in tsp_order_indices(robot.START_XY, geometries)]
 
 
 def reduce_points(points, n):

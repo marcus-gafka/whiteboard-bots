@@ -7,16 +7,16 @@
 <style>
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085;
-    --border: #d9dde5; --accent: #2d6cdf; --accent-text: #ffffff;
+    --border: #d9dde5; --accent: #2d6cdf; --accent-text: #ffffff; --accent-soft: #e6eefc;
     --board: #ffffff; --board-edge: #9aa3b2; --path: #1d2330;
-    --connector: #e5484d; --danger: #c8242b; --danger-bg: #fdecec;
+    --connector: #e5484d; --danger: #c8242b; --danger-bg: #fdecec; --piece-l: 46%;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #12151b; --panel: #1b1f27; --text: #e6e9ef; --muted: #98a2b3;
-      --border: #2c323d; --accent: #5b8ef0; --accent-text: #0b0e13;
+      --border: #2c323d; --accent: #5b8ef0; --accent-text: #0b0e13; --accent-soft: #1e2a42;
       --board: #0f1217; --board-edge: #5a6475; --path: #e6e9ef;
-      --connector: #ff6b6f; --danger: #ff7a7f; --danger-bg: #3a1a1c;
+      --connector: #ff6b6f; --danger: #ff7a7f; --danger-bg: #3a1a1c; --piece-l: 62%;
     }
   }
   * { box-sizing: border-box; }
@@ -24,40 +24,56 @@
          background: var(--bg); color: var(--text); }
   .app { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; }
   aside { background: var(--panel); border-right: 1px solid var(--border); padding: 20px;
-          display: flex; flex-direction: column; gap: 18px; }
+          display: flex; flex-direction: column; gap: 16px; }
   h1 { font-size: 17px; margin: 0; }
   label.field { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 13px; }
   .hint { font-weight: 400; color: var(--muted); font-size: 12px; }
   select, input[type=number] { font: inherit; padding: 7px 9px; border: 1px solid var(--border);
           border-radius: 6px; background: var(--bg); color: var(--text); }
-  .drop { border: 1.5px dashed var(--border); border-radius: 8px; padding: 16px; text-align: center;
-          color: var(--muted); cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop { border: 1.5px dashed var(--border); border-radius: 8px; padding: 14px; text-align: center;
+          color: var(--muted); cursor: pointer; transition: border-color .15s; }
   .drop.over, .drop:hover { border-color: var(--accent); }
   .drop strong { color: var(--text); display: block; word-break: break-all; }
   .or { text-align: center; color: var(--muted); font-size: 12px; margin: -6px 0; }
-  button { font: inherit; font-weight: 600; padding: 9px 12px; border-radius: 6px; cursor: pointer;
+  button { font: inherit; font-weight: 600; padding: 8px 12px; border-radius: 6px; cursor: pointer;
            border: 1px solid var(--border); background: var(--bg); color: var(--text); }
   button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-  button:disabled { opacity: .5; cursor: default; }
-  .row { display: flex; gap: 8px; }
-  .row > * { flex: 1; }
+  button:disabled { opacity: .45; cursor: default; }
+  kbd { font: 11px ui-monospace, monospace; padding: 1px 4px; border: 1px solid var(--border);
+        border-radius: 3px; color: var(--muted); margin-left: 4px; }
   .stats { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; margin: 0; }
   .stats dt { color: var(--muted); }
   .stats dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
   .error { background: var(--danger-bg); color: var(--danger); padding: 10px 12px; border-radius: 6px;
            font-size: 13px; }
-  main { padding: 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-  .stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 300px; }
-  svg { width: 100%; max-height: calc(100vh - 110px); }
-  .empty { color: var(--muted); }
-  .legend { display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+  main { padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .topbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; padding: 3px;
+          background: var(--panel); }
+  .tabs button { border: 0; background: transparent; padding: 6px 14px; }
+  .tabs button[aria-selected=true] { background: var(--accent-soft); color: var(--accent); }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
   .legend span::before { content: ""; display: inline-block; width: 18px; height: 0;
           vertical-align: middle; margin-right: 6px; border-top: 2px solid; }
-  .lg-home::before { display: none !important; }
   .lg-path::before { border-color: var(--path) !important; }
   .lg-conn::before { border-color: var(--connector) !important; border-top-style: dashed !important; }
+  .lg-pool::before { border-color: hsl(200 70% var(--piece-l)) !important; opacity: .6; }
+  .lg-home::before { display: none !important; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .toolbar .sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 4px; }
+  .toolbar button[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent);
+          color: var(--accent); }
+  .toolbar .grow { flex: 1; }
+  .progress { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+  .stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 300px; }
+  .stage svg { width: 100%; max-height: calc(100vh - 150px); user-select: none; }
+  .empty { color: var(--muted); }
   .player { display: flex; gap: 10px; align-items: center; }
   .player input[type=range] { flex: 1; }
+  .hit { stroke: transparent; fill: none; pointer-events: stroke; }
+  .editor[data-tool=place] .hit.pool { cursor: pointer; }
+  .editor[data-tool=cut] .hit.pool { cursor: crosshair; }
+  .editor[data-tool=cut] .hit.pool.nocut { cursor: not-allowed; }
   [hidden] { display: none !important; }
   @media (max-width: 760px) {
     .app { grid-template-columns: 1fr; }
@@ -86,28 +102,53 @@
       <select id="sample"><option value="">—</option></select>
     </label>
 
+    <button id="load" class="primary" disabled>Load drawing</button>
+
     <label class="field">Point count <span class="hint">Leave blank to keep every point (can be 100k+)</span>
       <input id="points" type="number" min="2" step="1" placeholder="all" value="1000">
     </label>
 
-    <button id="go" class="primary" disabled>Process</button>
     <div id="error" class="error" hidden></div>
-
     <dl id="stats" class="stats" hidden></dl>
     <button id="download" hidden>Download trajectory .txt</button>
   </aside>
 
   <main>
-    <div class="legend">
-      <span class="lg-path">Drawn path</span>
-      <span class="lg-conn">Pen-down travel between pieces</span>
-      <span class="lg-home">★ Home</span>
+    <div class="topbar">
+      <div class="tabs" role="tablist" id="tabs" hidden>
+        <button role="tab" data-mode="auto" aria-selected="true">Auto order</button>
+        <button role="tab" data-mode="manual" aria-selected="false">Manual order</button>
+      </div>
+      <div class="legend" id="legend">
+        <span class="lg-path">Drawn</span>
+        <span class="lg-pool" id="lgPool" hidden>Not yet placed</span>
+        <span class="lg-conn">Pen-down travel between pieces</span>
+        <span class="lg-home">★ Home</span>
+      </div>
     </div>
-    <div class="stage" id="stage"><p class="empty">Choose a drawing and press Process.</p></div>
+
+    <div class="toolbar" id="toolbar" hidden>
+      <button id="toolPlace" aria-pressed="true" title="Click a piece to add it next. It starts from the end nearest your click.">Place<kbd>P</kbd></button>
+      <button id="toolCut" aria-pressed="false" title="Click a point on a piece to split it in two there.">Cut<kbd>C</kbd></button>
+      <span class="sep"></span>
+      <button id="undo">Undo<kbd>Ctrl Z</kbd></button>
+      <button id="autofinish" title="Order the remaining pieces automatically, starting from the current pen position.">Auto-finish rest</button>
+      <button id="reset">Reset</button>
+      <span class="grow"></span>
+      <span class="progress" id="progress"></span>
+      <button id="generate" class="primary" disabled>Generate trajectory</button>
+    </div>
+
+    <div class="toolbar" id="previewBar" hidden>
+      <button id="backToEdit">← Edit order</button>
+    </div>
+
+    <div class="stage" id="stage"><p class="empty">Choose a drawing and press Load drawing.</p></div>
+
     <div class="player" id="player" hidden>
       <button id="play">Play</button>
-      <input id="scrub" type="range" min="0" value="0">
-      <select id="speed" title="Playback speed">
+      <input id="scrub" type="range" min="0" value="0" aria-label="Playback position">
+      <select id="speed" title="Playback speed" aria-label="Playback speed">
         <option value="1">1×</option><option value="5">5×</option>
         <option value="20" selected>20×</option><option value="100">100×</option>
       </select>
@@ -118,29 +159,109 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const SVGNS = "http://www.w3.org/2000/svg";
-let robots = [], chosenFile = null, result = null;
+
+const app = {
+  chosenFile: null,
+  job: null,            // response of POST /api/jobs
+  mode: "auto",         // "auto" | "manual"
+  manualView: "edit",   // "edit" | "preview" (inside the manual tab)
+  result: null,         // last trajectory response being previewed
+  manual: null,         // { pool:Set, placed, complete, can_undo, pen, cuttable:Set }
+  pieces: new Map(),    // piece id -> display points (cached across manual actions)
+  roots: new Map(),     // piece id -> original geometry id (for colour)
+  tool: "place",
+  busy: false,
+};
 let anim = { playing: false, idx: 0, raf: 0, last: 0, carry: 0 };
 
+// ---------------------------------------------------------------- helpers
+function el(tag, attrs = {}, parent) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const ptsAttr = (pts) => pts.map(p => p.join(",")).join(" ");
+const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+function showError(msg) { $("error").textContent = msg || ""; $("error").hidden = !msg; }
+function fmtDuration(ms) {
+  const s = Math.round(ms / 1000), m = Math.floor(s / 60);
+  return m ? `${m} min ${s % 60} s` : `${s} s`;
+}
+function setStats(rows) {
+  $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  $("stats").hidden = !rows.length;
+}
+function pieceColor(id) {
+  const root = app.roots.get(id) ?? id;
+  const hue = (root * 137.508) % 360;
+  // Cut halves keep their parent's hue; alternate lightness so neighbours differ.
+  const shift = id === root ? "" : (id % 2 ? " - 10%" : " + 8%");
+  return `hsl(${hue.toFixed(1)} 68% calc(var(--piece-l)${shift}))`;
+}
+
+async function api(method, url, body) {
+  const opts = { method };
+  if (body instanceof FormData) opts.body = body;
+  else if (body !== undefined) {
+    opts.body = JSON.stringify(body);
+    opts.headers = { "Content-Type": "application/json" };
+  }
+  const res = await fetch(url, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const d = data.detail;
+    throw new Error(typeof d === "string" ? d : Array.isArray(d) ? d.map(x => x.msg).join("; ") : "Request failed.");
+  }
+  return data;
+}
+
+// Board frame: x right, y up. Returns { svg, g, sw } with g flipped into board coords.
+function makeBoard(board) {
+  const { width: W, height: H } = board, pad = Math.max(W, H) * 0.04;
+  const svg = el("svg", { viewBox: `${-pad} ${-pad} ${W + 2 * pad} ${H + 2 * pad}` });
+  const g = el("g", { transform: `translate(0 ${H}) scale(1 -1)` }, svg);
+  const sw = Math.max(W, H) / 400;
+  el("rect", { x: 0, y: 0, width: W, height: H, fill: "var(--board)", stroke: "var(--board-edge)",
+    "stroke-width": sw, "stroke-dasharray": `${sw * 4} ${sw * 3}` }, g);
+  return { svg, g, sw, H };
+}
+function addHome(svg, board, sw, H) {
+  // Drawn outside the flipped group so the glyph isn't upside down.
+  const star = el("text", { x: board.start[0], y: H - board.start[1], "font-size": sw * 14,
+    "text-anchor": "middle", "dominant-baseline": "central", fill: "var(--text)",
+    "pointer-events": "none" }, svg);
+  star.textContent = "★";
+}
+function connector(g, a, b, sw) {
+  return el("line", { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: "var(--connector)",
+    "stroke-width": sw * 1.2, "stroke-dasharray": `${sw * 3} ${sw * 2}`, "pointer-events": "none" }, g);
+}
+function travelLength(start, orderedPieces) {
+  let total = 0, prev = start;
+  for (const p of orderedPieces) { total += dist(prev, p[0]); prev = p[p.length - 1]; }
+  return total;
+}
+
+// ---------------------------------------------------------------- inputs
 async function init() {
   try {
-    robots = await (await fetch("/api/robots")).json();
+    const robots = await api("GET", "/api/robots");
     $("robot").innerHTML = robots.map(r => `<option>${r.name}</option>`).join("");
-    const samples = await (await fetch("/api/samples")).json();
+    const samples = await api("GET", "/api/samples");
     $("sample").innerHTML += samples.map(s => `<option>${s}</option>`).join("");
   } catch (e) { showError("Could not reach the server."); }
 }
-
 function setFile(f) {
-  chosenFile = f;
+  app.chosenFile = f;
   $("dropName").textContent = f ? f.name : "Drop a .dxf here";
   if (f) $("sample").value = "";
-  updateGo();
+  updateLoad();
 }
-function updateGo() { $("go").disabled = !(chosenFile || $("sample").value); }
-function showError(msg) { $("error").textContent = msg; $("error").hidden = !msg; }
+function updateLoad() { $("load").disabled = app.busy || !(app.chosenFile || $("sample").value); }
 
 $("drop").onclick = () => $("file").click();
-$("drop").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") $("file").click(); };
+$("drop").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
 $("file").onchange = () => setFile($("file").files[0] || null);
 $("drop").ondragover = (e) => { e.preventDefault(); $("drop").classList.add("over"); };
 $("drop").ondragleave = () => $("drop").classList.remove("over");
@@ -148,149 +269,318 @@ $("drop").ondrop = (e) => {
   e.preventDefault(); $("drop").classList.remove("over");
   if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
 };
-$("sample").onchange = () => { if ($("sample").value) { chosenFile = null; $("file").value = "";
-  $("dropName").textContent = "Drop a .dxf here"; } updateGo(); };
+$("sample").onchange = () => {
+  if ($("sample").value) { app.chosenFile = null; $("file").value = ""; $("dropName").textContent = "Drop a .dxf here"; }
+  updateLoad();
+};
+$("robot").onchange = () => { if (app.job) loadDrawing(); };
+$("points").onchange = () => { if (app.result) refreshPreview(); };
 
-$("go").onclick = async () => {
-  showError("");
-  const fd = new FormData();
-  fd.append("robot", $("robot").value);
-  if ($("points").value) fd.append("points", $("points").value);
-  if (chosenFile) fd.append("file", chosenFile); else fd.append("sample", $("sample").value);
-  $("go").disabled = true; $("go").textContent = "Processing…";
-  try {
-    const res = await fetch("/api/process", { method: "POST", body: fd });
-    const body = await res.json();
-    if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Request failed.");
-    result = body;
-    render();
-  } catch (e) {
-    showError(e.message);
-  } finally {
-    $("go").textContent = "Process"; updateGo();
-  }
+async function busy(fn) {
+  if (app.busy) return;
+  app.busy = true; updateLoad(); document.body.style.cursor = "progress";
+  try { showError(""); await fn(); }
+  catch (e) { showError(e.message); }
+  finally { app.busy = false; updateLoad(); document.body.style.cursor = ""; }
+}
+
+$("load").onclick = () => loadDrawing();
+function loadDrawing() {
+  return busy(async () => {
+    const fd = new FormData();
+    fd.append("robot", $("robot").value);
+    if (app.chosenFile) fd.append("file", app.chosenFile); else fd.append("sample", $("sample").value);
+    $("load").textContent = "Loading…";
+    try { app.job = await api("POST", "/api/jobs", fd); }
+    finally { $("load").textContent = "Load drawing"; }
+    app.manual = null; app.pieces.clear(); app.roots.clear();
+    app.manualView = "edit"; app.result = null;
+    $("tabs").hidden = false;
+    await showMode(app.mode);
+  });
+}
+
+// ---------------------------------------------------------------- modes
+$("tabs").onclick = (e) => {
+  const mode = e.target.closest("button")?.dataset.mode;
+  if (mode && mode !== app.mode && app.job) busy(() => showMode(mode));
 };
 
-function fmtDuration(ms) {
-  const s = Math.round(ms / 1000), m = Math.floor(s / 60);
-  return m ? `${m} min ${s % 60} s` : `${s} s`;
+async function showMode(mode) {
+  app.mode = mode;
+  for (const b of $("tabs").querySelectorAll("button")) b.setAttribute("aria-selected", b.dataset.mode === mode);
+  stop();
+  if (mode === "auto") {
+    await fetchPreview("auto");
+  } else if (app.manualView === "preview" && app.manual?.complete) {
+    await fetchPreview("manual");
+  } else {
+    app.manualView = "edit";
+    if (!app.manual) applyManual(await api("GET", `/api/jobs/${app.job.job}/manual`));
+    renderEditor();
+  }
 }
 
-function render() {
+async function fetchPreview(mode) {
+  const body = { mode };
+  if ($("points").value) body.points = Number($("points").value);
+  app.result = await api("POST", `/api/jobs/${app.job.job}/trajectory`, body);
+  renderPreview();
+}
+function refreshPreview() { busy(() => fetchPreview(app.result.mode)); }
+
+function setChrome({ editor }) {
+  $("toolbar").hidden = !editor;
+  $("previewBar").hidden = editor || app.mode !== "manual";
+  $("lgPool").hidden = !editor;
+  $("player").hidden = editor || !(app.result && app.result.rows.length);
+  $("download").hidden = editor || !(app.result && app.result.rows.length);
+}
+
+// ---------------------------------------------------------------- preview
+function renderPreview() {
   stop();
-  const r = result, { width: W, height: H } = r.board, pad = Math.max(W, H) * 0.04;
-  const svg = document.createElementNS(SVGNS, "svg");
-  svg.setAttribute("viewBox", `${-pad} ${-pad} ${W + 2 * pad} ${H + 2 * pad}`);
-  // Board y points up; flip once with a group transform.
-  const g = el("g", { transform: `translate(0 ${H}) scale(1 -1)` });
-  svg.appendChild(g);
-  const sw = Math.max(W, H) / 400;
+  const r = app.result;
+  const { svg, g, sw, H } = makeBoard(r.board);
 
-  g.appendChild(el("rect", { x: 0, y: 0, width: W, height: H, fill: "var(--board)",
-    stroke: "var(--board-edge)", "stroke-width": sw, "stroke-dasharray": `${sw * 4} ${sw * 3}` }));
-
-  // Connectors: home -> first piece, and end of each piece -> start of the next.
   let prev = r.board.start;
-  for (const piece of r.pieces) {
-    g.appendChild(el("line", { x1: prev[0], y1: prev[1], x2: piece[0][0], y2: piece[0][1],
-      stroke: "var(--connector)", "stroke-width": sw * 1.2, "stroke-dasharray": `${sw * 3} ${sw * 2}` }));
-    prev = piece[piece.length - 1];
-  }
+  for (const piece of r.pieces) { connector(g, prev, piece[0], sw); prev = piece[piece.length - 1]; }
 
-  const ghost = el("polyline", { points: r.path.map(p => p.join(",")).join(" "), fill: "none",
-    stroke: "var(--path)", "stroke-opacity": 0.25, "stroke-width": sw * 1.5,
-    "stroke-linejoin": "round", "stroke-linecap": "round" });
-  const drawn = el("polyline", { points: "", fill: "none", stroke: "var(--path)",
-    "stroke-width": sw * 1.8, "stroke-linejoin": "round", "stroke-linecap": "round" });
-  const pen = el("circle", { r: sw * 4, fill: "var(--accent)", visibility: "hidden" });
-  g.append(ghost, drawn, pen);
-
+  el("polyline", { points: ptsAttr(r.path), fill: "none", stroke: "var(--path)", "stroke-opacity": 0.25,
+    "stroke-width": sw * 1.5, "stroke-linejoin": "round", "stroke-linecap": "round" }, g);
+  anim.drawn = el("polyline", { points: "", fill: "none", stroke: "var(--path)", "stroke-width": sw * 1.8,
+    "stroke-linejoin": "round", "stroke-linecap": "round" }, g);
+  anim.pen = el("circle", { r: sw * 4, fill: "var(--accent)", visibility: "hidden" }, g);
   for (const i of r.unreachable)
-    g.appendChild(el("circle", { cx: r.path[i][0], cy: r.path[i][1], r: sw * 3, fill: "var(--danger)" }));
-
-  // Home marker drawn un-flipped so the glyph isn't upside down.
-  const star = el("text", { x: r.board.start[0], y: H - r.board.start[1], "font-size": sw * 14,
-    "text-anchor": "middle", "dominant-baseline": "central", fill: "var(--text)" });
-  star.textContent = "★";
-  svg.appendChild(star);
-
+    el("circle", { cx: r.path[i][0], cy: r.path[i][1], r: sw * 3, fill: "var(--danger)" }, g);
+  addHome(svg, r.board, sw, H);
   $("stage").replaceChildren(svg);
-  anim.drawn = drawn; anim.pen = pen;
 
-  const c = r.counts, n = r.path.length;
-  $("stats").innerHTML = [
+  const c = app.job.counts, n = r.path.length;
+  setStats([
+    ["Drawing", `${app.job.source} on ${r.robot}`],
+    ["Order", r.mode === "manual" ? "Manual" : "Auto (nearest neighbour)"],
     ["Entities", `${c.lines} lines, ${c.circles} circles, ${c.arcs} arcs, ${c.polylines} polylines`],
     ["Pieces", r.pieces.length],
+    ["Travel between pieces", travelLength(r.board.start, r.pieces).toFixed(2)],
     ["Points", `${n.toLocaleString()} of ${r.total_points.toLocaleString()}`],
     ["Est. draw time", r.rows.length ? fmtDuration(r.duration_ms) : "—"],
-  ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
-  $("stats").hidden = false;
+  ]);
+  if (r.unreachable.length)
+    showError(`${r.unreachable.length} point(s) are outside ${r.robot}'s reach (red dots). No trajectory was generated.`);
 
-  if (r.unreachable.length) {
-    showError(`${r.unreachable.length} point(s) are outside ${r.robot}'s reach (red dots). ` +
-              `No trajectory was generated.`);
-  }
-  const ok = r.rows.length > 0;
-  $("download").hidden = !ok;
-  $("player").hidden = !ok;
-  $("scrub").max = n; $("scrub").value = 0;
+  setChrome({ editor: false });
+  $("scrub").max = n;
   setProgress(0);
-}
-
-function el(tag, attrs) {
-  const e = document.createElementNS(SVGNS, tag);
-  for (const k in attrs) e.setAttribute(k, attrs[k]);
-  return e;
 }
 
 function setProgress(i) {
   anim.idx = i;
-  const pts = result.path.slice(0, i);
-  anim.drawn.setAttribute("points", pts.map(p => p.join(",")).join(" "));
+  const pts = app.result.path.slice(0, i);
+  anim.drawn.setAttribute("points", ptsAttr(pts));
   if (i > 0) {
     anim.pen.setAttribute("cx", pts[i - 1][0]); anim.pen.setAttribute("cy", pts[i - 1][1]);
     anim.pen.setAttribute("visibility", "visible");
   } else anim.pen.setAttribute("visibility", "hidden");
   $("scrub").value = i;
 }
-
 // Plays back at the real per-move timing from the trajectory, sped up.
 function tick(t) {
   if (!anim.playing) return;
+  const rows = app.result.rows;
   anim.carry += (t - anim.last) * Number($("speed").value);
   anim.last = t;
   let i = anim.idx;
-  while (i < result.rows.length && anim.carry >= result.rows[i][6]) { anim.carry -= result.rows[i][6]; i++; }
+  while (i < rows.length && anim.carry >= rows[i][6]) { anim.carry -= rows[i][6]; i++; }
   if (i !== anim.idx) setProgress(i);
-  if (i >= result.rows.length) return stop();
+  if (i >= rows.length) return stop();
   anim.raf = requestAnimationFrame(tick);
 }
 function play() {
-  if (anim.idx >= result.rows.length) setProgress(0);
+  if (anim.idx >= app.result.rows.length) setProgress(0);
   anim.playing = true; anim.carry = 0; anim.last = performance.now();
   $("play").textContent = "Pause";
   anim.raf = requestAnimationFrame(tick);
 }
-function stop() {
-  anim.playing = false; cancelAnimationFrame(anim.raf);
-  $("play").textContent = "Play";
-}
+function stop() { anim.playing = false; cancelAnimationFrame(anim.raf); $("play").textContent = "Play"; }
 $("play").onclick = () => anim.playing ? stop() : play();
 $("scrub").oninput = () => { stop(); setProgress(Number($("scrub").value)); };
 
 // Same tab-separated format paths/TrajectoryIO.py reads, so the CLI can replay it.
 $("download").onclick = () => {
+  const r = app.result;
   const lines = ["x\ty\ttheta1\ttheta2\tsteps1\tsteps2\tinterval",
-    ...result.rows.map(r => r.map((v, i) => i < 4 ? v.toFixed(3) : v).join("\t"))];
-  const blob = new Blob([lines.join("\n") + "\n"], { type: "text/plain" });
+    ...r.rows.map(row => row.map((v, i) => i < 4 ? v.toFixed(3) : v).join("\t"))];
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `${result.robot}_${result.source}_${result.path.length}.txt`;
+  a.href = URL.createObjectURL(new Blob([lines.join("\n") + "\n"], { type: "text/plain" }));
+  a.download = `${r.robot}_${r.source}_${r.path.length}.txt`;
   a.click();
   URL.revokeObjectURL(a.href);
 };
 
-$("robot").onchange = $("points").onchange = () => { if (result) $("go").click(); };
+// ---------------------------------------------------------------- manual editor
+function applyManual(s) {
+  for (const [id, pts] of Object.entries(s.pieces)) app.pieces.set(Number(id), pts);
+  for (const [id, root] of Object.entries(s.roots)) app.roots.set(Number(id), root);
+  app.manual = { ...s, pool: new Set(s.pool), cuttable: new Set(s.cuttable) };
+}
+
+function oriented(id, reverse) {
+  const pts = app.pieces.get(id);
+  return reverse ? [...pts].reverse() : pts;
+}
+
+let editor = null;  // { svg, g, sw, hover layer, ... } for the current render
+
+function renderEditor() {
+  stop();
+  const m = app.manual, board = app.job.board;
+  const { svg, g, sw, H } = makeBoard(board);
+  svg.classList.add("editor");
+  svg.dataset.tool = app.tool;
+  const many = app.pieces.size > 300;   // skip per-piece decorations on very dense drawings
+
+  // Placed pieces + travel connectors.
+  const placedPieces = m.placed.map(([id, rev]) => oriented(id, rev));
+  let prev = board.start;
+  placedPieces.forEach((pts, i) => {
+    connector(g, prev, pts[0], sw);
+    el("polyline", { points: ptsAttr(pts), fill: "none", stroke: "var(--path)", "stroke-width": sw * 1.8,
+      "stroke-linejoin": "round", "stroke-linecap": "round", "pointer-events": "none" }, g);
+    if (!many) {
+      const t = el("text", { x: pts[0][0], y: H - pts[0][1], "font-size": sw * 9, "font-weight": 700,
+        fill: "var(--muted)", dx: sw * 3, dy: -sw * 3, "pointer-events": "none" }, svg);
+      t.textContent = i + 1;
+    }
+    prev = pts[pts.length - 1];
+  });
+
+  // Pool pieces: visible stroke + a wide invisible hit target.
+  const pool = [...m.pool];
+  for (const id of pool) {
+    const pts = app.pieces.get(id), color = pieceColor(id);
+    el("polyline", { points: ptsAttr(pts), fill: "none", stroke: color, "stroke-opacity": 0.6,
+      "stroke-width": sw * 1.6, "stroke-linejoin": "round", "stroke-linecap": "round",
+      "pointer-events": "none", "data-vis": id }, g);
+    if (!many) for (const end of [pts[0], pts[pts.length - 1]])
+      el("circle", { cx: end[0], cy: end[1], r: sw * 1.6, fill: "var(--board)", stroke: color,
+        "stroke-width": sw * 0.8, "pointer-events": "none" }, g);
+  }
+  for (const id of pool) {
+    const hit = el("polyline", { points: ptsAttr(app.pieces.get(id)), class: "hit pool" +
+      (m.cuttable.has(id) ? "" : " nocut"), "stroke-width": sw * 9, "data-id": id }, g);
+    hit.addEventListener("pointermove", (e) => hover(id, e));
+    hit.addEventListener("pointerleave", () => clearHover());
+    hit.addEventListener("click", (e) => clickPiece(id, e));
+  }
+
+  const hoverLayer = el("g", { "pointer-events": "none" }, g);
+  el("circle", { cx: m.pen[0], cy: m.pen[1], r: sw * 3.5, fill: "var(--accent)", "pointer-events": "none" }, g);
+  addHome(svg, board, sw, H);
+  $("stage").replaceChildren(svg);
+  editor = { svg, g, sw, hoverLayer };
+
+  // Toolbar + stats.
+  const placedCount = m.placed.length, total = placedCount + pool.length;
+  $("progress").textContent = `${placedCount} / ${total} placed`;
+  $("undo").disabled = !m.can_undo;
+  $("autofinish").disabled = m.complete;
+  $("reset").disabled = !m.can_undo && placedCount === 0;
+  $("generate").disabled = !m.complete;
+  $("toolPlace").setAttribute("aria-pressed", app.tool === "place");
+  $("toolCut").setAttribute("aria-pressed", app.tool === "cut");
+  setStats([
+    ["Drawing", `${app.job.source} on ${app.job.robot}`],
+    ["Pieces", `${total}${total !== app.job.piece_count ? ` (${app.job.piece_count} before cuts)` : ""}`],
+    ["Placed", `${placedCount} of ${total}`],
+    ["Travel so far", travelLength(board.start, placedPieces).toFixed(2)],
+  ]);
+  setChrome({ editor: true });
+}
+
+function toBoard(e) {
+  const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(editor.g.getScreenCTM().inverse());
+  return [p.x, p.y];
+}
+function nearestIndex(pts, q) {
+  let best = 0, bd = Infinity;
+  pts.forEach((p, i) => { const d = dist(p, q); if (d < bd) { bd = d; best = i; } });
+  return best;
+}
+// Start from whichever end of the piece the pointer is nearer to.
+function placementFor(id, q) {
+  const pts = app.pieces.get(id);
+  return dist(q, pts[pts.length - 1]) < dist(q, pts[0]);
+}
+
+function clearHover() {
+  if (!editor) return;
+  editor.hoverLayer.replaceChildren();
+  editor.g.querySelectorAll("[data-vis].hl").forEach(n => {
+    n.classList.remove("hl"); n.setAttribute("stroke-opacity", 0.6);
+  });
+}
+function hover(id, e) {
+  clearHover();
+  const { hoverLayer: L, sw } = editor, q = toBoard(e), pts = app.pieces.get(id);
+  const vis = editor.g.querySelector(`[data-vis="${id}"]`);
+  vis.classList.add("hl"); vis.setAttribute("stroke-opacity", 1);
+  el("polyline", { points: ptsAttr(pts), fill: "none", stroke: pieceColor(id), "stroke-width": sw * 3,
+    "stroke-linejoin": "round", "stroke-linecap": "round" }, L);
+
+  if (app.tool === "place") {
+    const rev = placementFor(id, q), start = rev ? pts[pts.length - 1] : pts[0];
+    connector(L, app.manual.pen, start, sw);
+    el("circle", { cx: start[0], cy: start[1], r: sw * 3, fill: pieceColor(id), stroke: "var(--board)",
+      "stroke-width": sw }, L);
+  } else if (app.manual.cuttable.has(id)) {
+    const p = pts[nearestIndex(pts, q)];
+    const s = sw * 4;
+    for (const [dx, dy] of [[1, 1], [1, -1]])
+      el("line", { x1: p[0] - s * dx, y1: p[1] - s * dy, x2: p[0] + s * dx, y2: p[1] + s * dy,
+        stroke: "var(--danger)", "stroke-width": sw * 1.5, "stroke-linecap": "round" }, L);
+  }
+}
+
+function manualAction(body) {
+  return busy(async () => {
+    applyManual(await api("POST", `/api/jobs/${app.job.job}/manual`, body));
+    renderEditor();
+  });
+}
+function clickPiece(id, e) {
+  const q = toBoard(e);
+  if (app.tool === "place") manualAction({ action: "place", piece: id, reverse: placementFor(id, q) });
+  else if (app.manual.cuttable.has(id)) manualAction({ action: "cut", piece: id, point: q });
+  else showError("That piece is too short to cut further.");
+}
+
+function setTool(tool) {
+  app.tool = tool;
+  if (editor) { editor.svg.dataset.tool = tool; clearHover(); }
+  $("toolPlace").setAttribute("aria-pressed", tool === "place");
+  $("toolCut").setAttribute("aria-pressed", tool === "cut");
+}
+$("toolPlace").onclick = () => setTool("place");
+$("toolCut").onclick = () => setTool("cut");
+$("undo").onclick = () => manualAction({ action: "undo" });
+$("autofinish").onclick = () => manualAction({ action: "autofinish" });
+$("reset").onclick = () => manualAction({ action: "reset" });
+$("generate").onclick = () => busy(async () => { app.manualView = "preview"; await fetchPreview("manual"); });
+$("backToEdit").onclick = () => { app.manualView = "edit"; showError(""); renderEditor(); };
+
+document.addEventListener("keydown", (e) => {
+  if (app.mode !== "manual" || app.manualView !== "edit" || !app.manual) return;
+  if (e.target.closest("input, select, textarea")) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+    e.preventDefault(); if (app.manual.can_undo) manualAction({ action: "undo" });
+  } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+    const k = e.key.toLowerCase();
+    if (k === "p" || k === "escape") setTool("place");
+    else if (k === "c") setTool("cut");
+  }
+});
+
 init();
 </script>
 </body>

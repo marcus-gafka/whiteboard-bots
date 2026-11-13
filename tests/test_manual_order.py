@@ -203,3 +203,58 @@ def test_session_raises_manual_order_aborted_when_window_closed():
             mo.prompt_manual_order(geometries, FakeRobot())
     finally:
         builtins.input = original_input
+
+
+# ---------------------------------------------------------------------------
+# ManualOrderState (UI-independent API used by the web app)
+# ---------------------------------------------------------------------------
+
+def _state():
+    return mo.ManualOrderState([
+        [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0)],
+        [(10, 0), (11, 0), (12, 0), (13, 0)],
+    ])
+
+
+def test_state_place_and_pen_position():
+    st = _state()
+    assert st.pen_position((9, 9)) == (9, 9)
+    st.place(1, reverse=True)
+    assert st.pen_position((9, 9)) == (10, 0)
+    with pytest.raises(mo.ManualOrderError):
+        st.place(1)
+
+
+def test_state_cut_at_point_and_undo():
+    st = _state()
+    a, b = st.cut_at_point(0, (2.1, 0))
+    assert st.all_pieces[a] == [(0, 0), (1, 0), (2, 0)]
+    assert st.all_pieces[b] == [(3, 0), (4, 0), (5, 0)]
+    assert st.pool_ids == {1, a, b}
+    assert st.undo() == "cut"
+    assert st.pool_ids == {0, 1} and a not in st.all_pieces
+
+
+def test_state_rejects_bad_cuts():
+    st = _state()
+    with pytest.raises(mo.ManualOrderError):
+        st.cut(0, 0)          # too close to the start
+    st.place(1)
+    short = mo.ManualOrderState([[(0, 0), (1, 0), (2, 0)]])
+    with pytest.raises(mo.ManualOrderError):
+        short.cut(0, 1)       # 3 points is too short to cut
+    st.undo()
+    with pytest.raises(mo.ManualOrderError):
+        st.undo()             # failed cuts leave nothing to undo
+
+
+def test_state_place_many_is_one_undo_step():
+    st = _state()
+    st.place_many([(1, False), (0, True)])
+    assert st.is_complete
+    assert st.ordered_path() == [[(10, 0), (11, 0), (12, 0), (13, 0)],
+                                 [(5, 0), (4, 0), (3, 0), (2, 0), (1, 0), (0, 0)]]
+    assert st.undo() == "batch"
+    assert st.pool_ids == {0, 1} and st.placed_order == [] and not st.history
+    with pytest.raises(mo.ManualOrderError):
+        st.place_many([(0, False), (0, True)])

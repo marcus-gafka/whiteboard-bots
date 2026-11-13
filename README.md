@@ -17,9 +17,17 @@ python3 -m venv .venv
 ```
 
 Open http://127.0.0.1:8000, then upload a DXF (or pick a sample from `.DXFS/`), choose a robot
-and point count, and press **Process**. You can preview the ordered path, play it back
-at the robot's real timing, and download the trajectory `.txt`. The CLI's "saved TXT" mode
-can replay that file.
+and press **Load drawing**.
+
+- **Auto order**: nearest-neighbour ordering. Preview the path, play it back at the robot's
+  real timing, and download the trajectory `.txt` (the CLI's "saved TXT" mode can replay it).
+- **Manual order**: build the draw order yourself.
+  - **Place** (`P`): click a piece to draw it next. It starts from the end nearest your click.
+  - **Cut** (`C`): click a point on a piece to split it in two there.
+  - **Undo** (`Ctrl+Z`), **Reset**, and **Auto-finish rest**, which orders whatever is left
+    from the current pen position and undoes as one step.
+  - **Generate trajectory** when every piece is placed. The sidebar shows pen-down travel
+    between pieces so you can compare against the auto order.
 
 ## CLI
 

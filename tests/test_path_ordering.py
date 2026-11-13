@@ -53,3 +53,11 @@ def test_tsp_geometry_order_uses_robot_start_not_class_default():
     ordered = po.tsp_geometry_order(OffsetStartRobot(), [near_origin, near_offset_start])
     first_points = set(map(tuple, ordered[0]))
     assert first_points == set(map(tuple, near_offset_start))
+
+
+def test_tsp_order_indices_starts_from_given_pen_position():
+    geometries = [[(0, 0), (1, 0)], [(10, 0), (9, 0)]]
+    # Pen near (10, 0): piece 1 first, already oriented, then piece 0
+    # entered from its nearer end (1, 0) -> reversed.
+    assert po.tsp_order_indices((10.5, 0), geometries) == [(1, False), (0, True)]
+    assert po.tsp_order_indices((0, 0), []) == []
