@@ -1,6 +1,8 @@
+import time
+
+import serial
+
 from comms.CommsBase import CommsBase, CommsError
-from Constants import Constants as c
-import serial, time
 
 
 class SerialComms(CommsBase):
@@ -8,15 +10,15 @@ class SerialComms(CommsBase):
     # bootloader time to hand over before the first command.
     RESET_DELAY_S = 2.0
 
-    def __init__(self, port=None, baud=None, read_timeout=0.5, reset_delay=None):
-        self.port = port or c.DEFAULT_SERIAL_PORT
+    def __init__(self, port, baud, read_timeout=0.5, reset_delay=RESET_DELAY_S):
+        self.port = port
+        self.reset_delay = reset_delay
         try:
             # read_timeout makes readline() return periodically so callers'
             # ack deadlines are honoured instead of blocking forever.
-            self.ser = serial.Serial(self.port, baud or c.DEFAULT_SERIAL_BAUD, timeout=read_timeout)
+            self.ser = serial.Serial(port, baud, timeout=read_timeout)
         except serial.SerialException as e:
             raise CommsError(self._explain(e)) from e
-        self.reset_delay = self.RESET_DELAY_S if reset_delay is None else reset_delay
 
     def _explain(self, e):
         msg = str(e)

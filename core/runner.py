@@ -45,11 +45,6 @@ class RobotRunner:
             s["position_robot"] = self._position[0] if self._position else None
             return s
 
-    @property
-    def active(self):
-        with self._lock:
-            return self._status["state"] in ACTIVE_STATES
-
     def position(self):
         with self._lock:
             return self._position

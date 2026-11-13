@@ -3,30 +3,6 @@ reduction for the final drawn path."""
 
 import numpy as np
 
-from paths.GeometryTransform import dist_points
-
-
-def geometry_dist_to_start(robot, points):
-    start = np.array(robot.START_XY)
-    p_arr = np.array(points)
-    dist_start = np.linalg.norm(p_arr[0] - start)
-    dist_end = np.linalg.norm(p_arr[-1] - start)
-    return min(dist_start, dist_end)
-
-
-def geometry_distance(g1, g2):
-    g1 = np.array(g1)
-    g2 = np.array(g2)
-    start = 0
-    end = -1
-    candidates = [
-        (np.linalg.norm(g1[end] - g2[start]), False, False),
-        (np.linalg.norm(g1[end] - g2[end]), False, True),
-        (np.linalg.norm(g1[start] - g2[start]), True, False),
-        (np.linalg.norm(g1[start] - g2[end]), True, True),
-    ]
-    return min(candidates, key=lambda x: x[0])
-
 
 def tsp_order_indices(start_xy, geometries):
     """Greedy nearest-neighbour draw order starting from the pen at
@@ -45,14 +21,11 @@ def tsp_order_indices(start_xy, geometries):
     d_start = np.linalg.norm(starts - start, axis=1)
     d_end = np.linalg.norm(ends - start, axis=1)
     current = int(np.argmin(np.minimum(d_start, d_end)))
-    reversed_ = bool(d_start[current] > d_end[current])
-    order = [(current, reversed_)]
+    order = [(current, bool(d_start[current] > d_end[current]))]
     visited[current] = True
 
-    # Vectorized form of calling geometry_distance(prev, g) for every
-    # unvisited g: same four candidate pairings, same tie-breaking (first
-    # candidate in that order, then lowest index), but O(n) numpy per step
-    # instead of O(n) Python calls — matters for DXFs with thousands of LINEs.
+    # Each step scores every piece by its best of four endpoint pairings with
+    # the previous piece, vectorized so DXFs with thousands of LINEs stay fast.
     for _ in range(n - 1):
         idx, rev = order[-1]
         prev_start, prev_end = (ends[idx], starts[idx]) if rev else (starts[idx], ends[idx])
@@ -79,14 +52,10 @@ def tsp_geometry_order(robot, geometries):
 
 
 def reduce_points(points, n):
+    """n points evenly spaced by index along `points`, keeping both ends."""
     points = np.array(points)
     if n >= len(points):
         return points.tolist()
-
     step = (len(points) - 1) / (n - 1)
-    indices = np.unique(np.round(np.arange(n - 1) * step).astype(int))
-    indices = np.append(indices, len(points) - 1)
-    indices = np.unique(indices)
-
-    reduced = points[indices]
-    return reduced.tolist()
+    indices = np.unique(np.append(np.round(np.arange(n - 1) * step).astype(int), len(points) - 1))
+    return points[indices].tolist()

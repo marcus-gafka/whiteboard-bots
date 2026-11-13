@@ -1,23 +1,17 @@
 import abc
 
-import numpy as np
-import math
 
 class Robot(abc.ABC):
     """Shared contract for the interchangeable drawing mechanisms.
 
-    Subclasses must implement ik/fk/jacobian/get_links; everything else
-    (step/timing calculation, board-offset geometry, dexterity metrics) is
-    provided here so main.py/paths/*.py/Plotter.py can treat any
-    subclass polymorphically.
+    Subclasses implement the kinematics (ik/fk/get_links/get_bases); step and
+    timing calculation and the board <-> robot frame offset live here.
     """
 
     name = ""
 
-    # Initial marker position
+    # Pen home position, in board coordinates. Every trajectory starts here.
     START_XY = (0.0, 0.0)
-    START_X = START_XY[0]
-    START_Y = START_XY[1]
 
     # Motor values
     MAX_RPM = 5.0
@@ -31,82 +25,49 @@ class Robot(abc.ABC):
     OFFSET_X = None
     OFFSET_Y = None
 
+    # Robot-frame region the web preview frames (bases plus reach).
     MIN_PLOT_X = 0
     MAX_PLOT_X = 0
     MIN_PLOT_Y = 0
     MAX_PLOT_Y = 0
+
+    # How the linkage is drawn: "rigid" links or flexible "cable"s.
+    LINK_KIND = "rigid"
 
     def __init__(self):
         for attr in ("DRAWABLE_WIDTH", "DRAWABLE_HEIGHT", "OFFSET_X", "OFFSET_Y"):
             if getattr(self, attr) is None:
                 raise NotImplementedError(f"{self.__class__.__name__} must define {attr}")
 
-    def get_aspect_ratio(self):
-        return self.DRAWABLE_HEIGHT / self.DRAWABLE_WIDTH
-
-    def get_drawable_center(self):
-        return (
-            self.OFFSET_X + self.DRAWABLE_WIDTH / 2.0,
-            self.OFFSET_Y + self.DRAWABLE_HEIGHT / 2.0
-        )
-    
-    def get_drawable_box(self):
-        x0, y0 = self.OFFSET_X, self.OFFSET_Y
-        x1, y1 = x0 + self.DRAWABLE_WIDTH, y0 + self.DRAWABLE_HEIGHT
-        return [((x0, y0), (x0, y1)),
-                ((x0, y1), (x1, y1)),
-                ((x1, y1), (x1, y0)),
-                ((x1, y0), (x0, y0))]
-    
     def apply_board_offset(self, board_x, board_y):
-        robot_x = board_x + self.OFFSET_X
-        robot_y = board_y + self.OFFSET_Y
-        return robot_x, robot_y
-    
+        return board_x + self.OFFSET_X, board_y + self.OFFSET_Y
+
     def apply_inverse_board_offset(self, robot_x, robot_y):
-        board_x = robot_x - self.OFFSET_X
-        board_y = robot_y - self.OFFSET_Y
-        return board_x, board_y
+        return robot_x - self.OFFSET_X, robot_y - self.OFFSET_Y
 
     @abc.abstractmethod
     def ik(self, x, y):
-        """Inverse kinematics: board (x, y) -> (theta1_deg, theta2_deg)."""
+        """Inverse kinematics: board (x, y) -> (theta1_deg, theta2_deg).
+        Raises ValueError when the point is out of reach."""
 
     @abc.abstractmethod
     def fk(self, theta1_deg, theta2_deg):
-        """Forward kinematics: joint angles -> dict of named points, including 'tip'."""
-
-    @abc.abstractmethod
-    def jacobian(self, theta1_deg, theta2_deg):
-        """2x2 Jacobian relating joint-angle rates to tip-velocity."""
+        """Forward kinematics: joint angles -> dict of named robot-frame points, including 'tip'."""
 
     @abc.abstractmethod
     def get_links(self, theta1_deg, theta2_deg):
-        """List of (point, point) segments describing the linkage, for plotting."""
+        """List of (point, point) robot-frame segments describing the linkage; the first starts at the tip."""
+
+    @abc.abstractmethod
+    def get_bases(self):
+        """Fixed (motor-mounted) points of the linkage, in robot coordinates."""
 
     @classmethod
-    def calc_steps(cls, currentTheta1, currentTheta2, targetTheta1, targetTheta2):
-        deltaTheta1 = targetTheta1 - currentTheta1
-        deltaTheta2 = targetTheta2 - currentTheta2
-
-        steps1 = int(round(deltaTheta1 / cls.DEGREES_PER_STEP))
-        steps2 = int(round(deltaTheta2 / cls.DEGREES_PER_STEP))
-
+    def calc_steps(cls, current_t1, current_t2, target_t1, target_t2):
+        """(steps1, steps2, interval_ms) for one move. Steps are negated to
+        match the motors' wiring; the interval runs the busier motor at full speed."""
+        steps1 = int(round((target_t1 - current_t1) / cls.DEGREES_PER_STEP))
+        steps2 = int(round((target_t2 - current_t2) / cls.DEGREES_PER_STEP))
         max_steps = max(abs(steps1), abs(steps2))
         interval = 0 if max_steps == 0 else int((max_steps / cls.MAX_STEPS_PER_SEC) * 1000)
-
         return -steps1, -steps2, interval
-    
-    def is_singular(self, theta1_deg, theta2_deg, tol=1e-6):
-        J = self.jacobian(theta1_deg, theta2_deg)
-        sigma_min = np.linalg.svd(J, compute_uv=False)[-1]
-        return sigma_min < tol
-
-    def mobility(self, theta1_deg, theta2_deg):
-        J = self.jacobian(theta1_deg, theta2_deg)
-        return np.linalg.matrix_rank(J)
-
-    def manipulability(self, theta1_deg, theta2_deg):
-        J = self.jacobian(theta1_deg, theta2_deg)
-        return math.sqrt(np.linalg.det(J @ J.T))
-

@@ -42,9 +42,8 @@ def test_tsp_geometry_order_picks_nearest_next_geometry():
 
 
 def test_tsp_geometry_order_uses_robot_start_not_class_default():
-    # Regression test: geometry_dist_to_start must read the robot INSTANCE's
-    # START_XY, not a hardcoded/class-level default, so a hypothetical robot
-    # with a non-origin start position is still ordered correctly.
+    # Ordering must start from the robot's own START_XY, not a hardcoded
+    # origin, so a robot with a non-origin home is still ordered correctly.
     class OffsetStartRobot:
         START_XY = (100.0, 0.0)
 

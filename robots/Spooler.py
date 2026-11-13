@@ -1,7 +1,10 @@
 import math
+
 import numpy as np
-from robots.Robot import Robot
+
 from robots import Kinematics as kin
+from robots.Robot import Robot
+
 
 class Spooler(Robot):
 
@@ -21,21 +24,23 @@ class Spooler(Robot):
     MIN_PLOT_Y = -11
     MAX_PLOT_Y = 1
 
-    # Link lengths
+    LINK_KIND = "cable"
+
+    # Spools: left at the robot origin, right SPOOL_DISTANCE along +x.
     SPOOL_DISTANCE = 12
     SPOOL_DIAMETER = 2
 
     def __init__(self):
         super().__init__()
-
+        # Cable lengths with the pen at home (motor angle 0).
         self.ORIGIN_L1 = self.calc_l1(self.OFFSET_X, self.OFFSET_Y)
         self.ORIGIN_L2 = self.calc_l2(self.OFFSET_X, self.OFFSET_Y)
 
     def calc_l1(self, x, y):
-        return math.sqrt(x**2 + y**2)
+        return math.hypot(x, y)
 
     def calc_l2(self, x, y):
-        return math.sqrt((self.SPOOL_DISTANCE - x)**2 + y**2)
+        return math.hypot(self.SPOOL_DISTANCE - x, y)
 
     def _length_to_theta(self, length, origin_length):
         # Cable paid out = arc length on the spool: angle = arc_length / radius.
@@ -44,79 +49,28 @@ class Spooler(Robot):
     def _theta_to_length(self, theta_deg, origin_length):
         return origin_length + math.radians(theta_deg) * (self.SPOOL_DIAMETER / 2)
 
-    def _tip_from_lengths(self, l1, l2):
-        # Anchors: left spool at the origin, right spool SPOOL_DISTANCE away.
-        # elbow_up=False selects the "below the spools" solution this
-        # mechanism always uses.
-        tip = kin.circle_intersection(
-            np.array([0.0, 0.0]), l1,
-            np.array([self.SPOOL_DISTANCE, 0.0]), l2,
-            elbow_up=False,
-        )
-        if tip is None:
-            raise ValueError("FK impossible: cable lengths do not intersect")
-        return tip
-
     def ik(self, x, y):
-        x, y = self.apply_board_offset(x,y)
-
-        l1 = self.calc_l1(x, y)
-        l2 = self.calc_l2(x, y)
-
-        t1 = self._length_to_theta(l1, self.ORIGIN_L1)
-        t2 = self._length_to_theta(l2, self.ORIGIN_L2)
-
-        return t1, t2
+        x, y = self.apply_board_offset(x, y)
+        return (self._length_to_theta(self.calc_l1(x, y), self.ORIGIN_L1),
+                self._length_to_theta(self.calc_l2(x, y), self.ORIGIN_L2))
 
     def fk(self, theta1_deg, theta2_deg):
-        l1 = self._theta_to_length(theta1_deg, self.ORIGIN_L1)
-        l2 = self._theta_to_length(theta2_deg, self.ORIGIN_L2)
-
         A = np.array([0.0, 0.0])
-        B = np.array([self.SPOOL_DISTANCE, 0.0])
-        E = self._tip_from_lengths(l1, l2)
-
-        return {
-            "A": A,
-            "B": B,
-            "tip": E,      # end effector / marker
-            "l1": l1,
-            "l2": l2
-        }
-
-    def jacobian(self, theta1_deg, theta2_deg):
-        l1 = self._theta_to_length(theta1_deg, self.ORIGIN_L1)
-        l2 = self._theta_to_length(theta2_deg, self.ORIGIN_L2)
-
-        try:
-            x, y = self._tip_from_lengths(l1, l2)
-        except ValueError:
-            return np.zeros((2, 2))
-
-        S = self.SPOOL_DISTANCE
-        D = self.SPOOL_DIAMETER
-
-        # Partial derivatives of lengths w.r.t x, y
-        dl1_dx = x / l1
-        dl1_dy = y / l1
-        dl2_dx = (x - S) / l2
-        dl2_dy = y / l2
-
-        # Jacobian from tip velocities to length changes
-        J_lengths = np.array([[dl1_dx, dl1_dy],
-                            [dl2_dx, dl2_dy]])
-
-        # Convert Δl → Δt (degrees)
-        scale = 360 / (math.pi * D)
-        J = np.linalg.inv(J_lengths) * scale
-
-        return J
-
+        B = np.array([float(self.SPOOL_DISTANCE), 0.0])
+        # elbow_up=False: the pen hangs below the spools.
+        tip = kin.circle_intersection(A, self._theta_to_length(theta1_deg, self.ORIGIN_L1),
+                                      B, self._theta_to_length(theta2_deg, self.ORIGIN_L2),
+                                      elbow_up=False)
+        if tip is None:
+            raise ValueError("FK impossible: cable lengths do not intersect")
+        return {"A": A, "B": B, "tip": tip}
 
     def get_links(self, theta1_deg, theta2_deg):
         pts = self.fk(theta1_deg, theta2_deg)
-
         return [
             (pts["tip"], pts["A"]),  # left cable
-            (pts["tip"], pts["B"])   # right cable
+            (pts["tip"], pts["B"]),  # right cable
         ]
+
+    def get_bases(self):
+        return [(0.0, 0.0), (float(self.SPOOL_DISTANCE), 0.0)]

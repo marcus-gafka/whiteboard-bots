@@ -1,7 +1,8 @@
 # Whiteboard Bots
 
 Turns DXF drawings into stepper-motor trajectories for three drawing robots
-(FiveBar, Spooler, TwoLink).
+(FiveBar, Spooler, TwoLink). Everything (generating, previewing and sending a
+trajectory to the robot) goes through the web app.
 
 ## Setup
 
@@ -20,7 +21,8 @@ Open http://127.0.0.1:8000, then upload a DXF (or pick a sample from `.DXFS/`), 
 and press **Load drawing**.
 
 - **Auto order**: nearest-neighbour ordering. Preview the path, play it back at the robot's
-  real timing, and download the trajectory `.txt` (the CLI's "saved TXT" mode can replay it).
+  real timing (the robot's linkage is drawn and moves with the pen), and optionally download
+  the trajectory as a tab-separated `.txt`.
 - **Manual order**: build the draw order yourself.
   - **Place** (`P`): click a piece to draw it next. It starts from the end nearest your click.
   - **Cut** (`C`): click a point on a piece to split it in two there.
@@ -45,20 +47,15 @@ Once a trajectory preview is showing, use **Send to robot** in the sidebar. Pick
 - **Linux:** your user needs serial access:
   `sudo usermod -aG dialout $USER`, then log out and back in.
 
-## CLI
-
-```bash
-.venv/bin/python main.py
-```
-
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| `core/pipeline.py` | UI-agnostic pipeline (DXF → fitted, ordered points → trajectory) shared by CLI and web app |
-| `paths/` | DXF sampling, board fitting, ordering, manual ordering, file I/O |
+| `core/pipeline.py` | Processing pipeline (DXF → fitted, ordered points → trajectory, linkage poses) |
+| `core/runner.py` | Background sender that streams a trajectory to the robot |
+| `paths/` | DXF sampling, board fitting, automatic and manual ordering |
 | `robots/` | Kinematics for each robot |
-| `comms/` | Serial / network / dry-run transports |
+| `comms/` | Wire protocol, USB serial transport, simulated robot |
 | `webapp/` | FastAPI server and static frontend |
 
 ## Tests

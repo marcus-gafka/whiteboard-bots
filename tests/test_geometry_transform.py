@@ -9,17 +9,10 @@ def test_get_bounding_box():
     assert (min_x, max_x, min_y, max_y) == (0, 3, -1, 5)
 
 
-def test_dist_points():
-    assert gt.dist_points((0, 0), (3, 4)) == pytest.approx(5.0)
-
-
 def test_scale_and_translate_fits_drawable_area():
     class FakeRobot:
         DRAWABLE_WIDTH = 10.0
         DRAWABLE_HEIGHT = 10.0
-
-        def get_aspect_ratio(self):
-            return self.DRAWABLE_HEIGHT / self.DRAWABLE_WIDTH
 
     geometries = [[(0, 0), (20, 20)]]
     scaled = gt.scale_and_translate_geometries(FakeRobot(), geometries)

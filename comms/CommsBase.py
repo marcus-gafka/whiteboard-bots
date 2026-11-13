@@ -13,12 +13,9 @@ class CommsTimeout(CommsError):
 
 
 class CommsBase(abc.ABC):
-    """Common interface + wire protocol for sending step commands to a plotter.
-
-    Subclasses implement only the transport (_transmit/_read_ack); the
-    protocol itself ("steps1 steps2 interval\\n", then block for an ack
-    token) is defined once here via the template method send_steps().
-    """
+    """Wire protocol for sending step commands to a plotter: one
+    "steps1 steps2 interval\\n" line per move, then block until the robot
+    replies with the ack token. Subclasses implement only the transport."""
 
     def send_steps(self, steps1: int, steps2: int, interval: int, timeout: float | None = None) -> None:
         """Send one move and block until the robot acks it.
@@ -43,11 +40,7 @@ class CommsBase(abc.ABC):
         """Block for and return the next whitespace-stripped line of input."""
 
     def prepare(self) -> None:
-        """Optional post-connect settling step, run once before any commands
-        are sent. Default no-op; backends that need it (e.g. giving a serial
-        connection time to reset) override this instead of callers branching
-        on which backend is in use."""
-        pass
+        """Run once after connecting, before any commands are sent."""
 
     def close(self) -> None:
         pass

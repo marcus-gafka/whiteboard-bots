@@ -4,10 +4,14 @@ Run from the repo root:
     .venv/bin/uvicorn webapp.server:app --reload
 then open http://127.0.0.1:8000
 
+This is the only front end: every trajectory is generated, previewed and
+sent to the robot (over USB serial, or the simulated port) through it.
+
 Flow: POST /api/jobs (upload or sample) creates a job holding the board-fitted
 geometry. The client then either asks for an auto-ordered trajectory, or
 builds a manual order through /manual actions and asks for a trajectory from
-that. Jobs live in memory only (a single local user is the expected setup).
+that, then starts a run. Jobs live in memory only (a single local user is the
+expected setup).
 """
 
 import os
@@ -23,8 +27,8 @@ from pydantic import BaseModel
 from serial.tools import list_ports as serial_list_ports
 
 from Constants import Constants as c
-from comms.PsuedoComms import PsuedoComms
 from comms.SerialComms import SerialComms
+from comms.SimulatedComms import SimulatedComms
 from core import pipeline
 from core.runner import RobotRunner, RunnerBusy
 from paths import ManualOrder as manual_order
@@ -43,12 +47,11 @@ app = FastAPI(title="Whiteboard Bots")
 
 
 class Job:
-    def __init__(self, robot, source, counts, source_bbox, geometries):
+    def __init__(self, robot, source, counts, geometries):
         self.id = uuid.uuid4().hex[:12]
         self.robot = robot
         self.source = source
         self.counts = counts
-        self.source_bbox = source_bbox
         self.geometries = geometries          # board-fitted, original DXF order
         total = sum(len(g) for g in geometries)
         self.stride = max(1, -(-total // MAX_DISPLAY_POINTS))  # ceil
@@ -89,12 +92,13 @@ def _display(points, stride):
 
 
 def _board(bot):
-    return {"width": bot.DRAWABLE_WIDTH, "height": bot.DRAWABLE_HEIGHT, "start": list(bot.START_XY)}
+    return {"width": bot.DRAWABLE_WIDTH, "height": bot.DRAWABLE_HEIGHT, "start": list(bot.START_XY),
+            "robot": pipeline.robot_geometry(bot)}
 
 
 @app.get("/api/robots")
 def list_robots():
-    return [{"name": name, **_board(cls)} for name, cls in pipeline.ROBOTS.items()]
+    return [{"name": name, **_board(cls())} for name, cls in pipeline.ROBOTS.items()]
 
 
 @app.get("/api/samples")
@@ -119,7 +123,6 @@ async def create_job(
             if len(data) > MAX_UPLOAD_BYTES:
                 raise pipeline.PipelineError("File is larger than 20 MB.")
             source = os.path.splitext(os.path.basename(file.filename or "upload"))[0]
-            doc = pipeline.read_dxf_bytes(data)
         elif sample:
             # basename() keeps the lookup inside DXF_FOLDER.
             safe = os.path.basename(sample)
@@ -127,27 +130,25 @@ async def create_job(
             if not os.path.isfile(path):
                 raise pipeline.PipelineError(f"Sample '{safe}' not found.")
             source = os.path.splitext(safe)[0]
-            doc = pipeline.read_dxf_file(path)
+            with open(path, "rb") as f:
+                data = f.read()
         else:
             raise pipeline.PipelineError("Upload a DXF file or choose a sample.")
 
-        extraction = pipeline.extract(doc)
-        source_bbox = pipeline.bounding_box(extraction.geometries)
-        fitted = pipeline.fit_to_robot(bot, extraction.geometries)
+        geometries, counts = pipeline.extract(pipeline.read_dxf(data))
+        fitted = pipeline.fit_to_robot(bot, geometries)
     except pipeline.PipelineError as e:
         raise HTTPException(400, str(e))
 
-    job = Job(bot, source, extraction.counts, source_bbox, fitted)
+    job = Job(bot, source, counts, fitted)
     _store(job)
     return {
         "job": job.id,
         "source": source,
         "robot": bot.name,
         "board": _board(bot),
-        "counts": job.counts,
-        "source_bbox": source_bbox,
+        "counts": counts,
         "piece_count": len(fitted),
-        "total_points": sum(len(g) for g in fitted),
     }
 
 
@@ -170,7 +171,7 @@ def _compute(job, mode, points):
                 raise HTTPException(400, "Place every piece before generating a manual-order trajectory.")
             ordered = job.manual.ordered_path()
         else:
-            ordered = pipeline.auto_order(bot, job.geometries)
+            ordered = path_ordering.tsp_geometry_order(bot, job.geometries)
     try:
         all_points = pipeline.flatten(ordered)
         path = pipeline.reduce(all_points, points)
@@ -202,6 +203,7 @@ def trajectory(job_id: str, req: TrajectoryRequest):
             for (x, y, t1, t2), (s1, s2, iv) in zip(r["trajectory"], r["commands"])
         ],
         "duration_ms": sum(cmd[2] for cmd in r["commands"]),
+        **dict(zip(("poses", "pose_stride"), pipeline.trajectory_poses(bot, r["trajectory"]))),
     }
 
 
@@ -220,12 +222,14 @@ def _manual_state(job, include_pieces=None):
     """include_pieces: None = every live piece, else an iterable of ids."""
     st = job.manual
     ids = st.all_pieces.keys() if include_pieces is None else include_pieces
+    pen = st.pen_position(job.robot.START_XY)
     return {
         "pool": sorted(st.pool_ids),
         "placed": [[pid, rev] for pid, rev in st.placed_order],
         "complete": st.is_complete,
         "can_undo": bool(st.history),
-        "pen": list(st.pen_position(job.robot.START_XY)),
+        "pen": list(pen),
+        "pose": pipeline.pose_at(job.robot, *pen),
         "pieces": {str(pid): _display(st.all_pieces[pid], job.stride) for pid in ids},
         "roots": {str(pid): st.root_of[pid] for pid in ids},
         "cuttable": [pid for pid in st.pool_ids if manual_order.cuttable(st.all_pieces[pid])],
@@ -236,8 +240,7 @@ def _manual_state(job, include_pieces=None):
 def manual_get(job_id: str):
     job = _get(job_id)
     with job.lock:
-        if job.manual is None:
-            job.manual = manual_order.ManualOrderState(job.geometries)
+        job.manual = job.manual or manual_order.ManualOrderState(job.geometries)
         return _manual_state(job)
 
 
@@ -245,9 +248,7 @@ def manual_get(job_id: str):
 def manual_act(job_id: str, act: ManualAction):
     job = _get(job_id)
     with job.lock:
-        if job.manual is None:
-            job.manual = manual_order.ManualOrderState(job.geometries)
-        st = job.manual
+        st = job.manual = job.manual or manual_order.ManualOrderState(job.geometries)
         new_ids = []
         try:
             if act.action == "place":
@@ -258,7 +259,7 @@ def manual_act(job_id: str, act: ManualAction):
             elif act.action == "undo":
                 st.undo()
             elif act.action == "reset":
-                job.manual = st = manual_order.ManualOrderState(job.geometries)
+                job.manual = manual_order.ManualOrderState(job.geometries)
                 return _manual_state(job)
             elif act.action == "autofinish":
                 pool = sorted(st.pool_ids)
@@ -286,7 +287,7 @@ RUNNER = RobotRunner()
 
 def _open_comms(port, baud):
     if port == SIMULATED_PORT:
-        return lambda: PsuedoComms(simulate_delay=True, verbose=False)
+        return SimulatedComms
     return lambda: SerialComms(port, baud)
 
 
@@ -302,17 +303,15 @@ def list_ports():
     return found + [{"device": SIMULATED_PORT, "description": "Simulated (no robot)"}]
 
 
-class RunRequest(BaseModel):
-    job: str
-    mode: Literal["auto", "manual"] = "auto"
-    points: int | None = None
-    port: str
-    baud: int = c.DEFAULT_SERIAL_BAUD
-
-
 class PortRequest(BaseModel):
     port: str
     baud: int = c.DEFAULT_SERIAL_BAUD
+
+
+class RunRequest(PortRequest):
+    job: str
+    mode: Literal["auto", "manual"] = "auto"
+    points: int | None = None
 
 
 @app.get("/api/run")

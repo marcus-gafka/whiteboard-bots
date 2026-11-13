@@ -1,5 +1,3 @@
-import math
-
 import numpy as np
 import pytest
 
@@ -24,8 +22,8 @@ def test_circle_intersection_known_symmetric_case():
 
     # Both solutions must actually lie on both circles.
     for p in (up, down):
-        assert kin.dist(p, c1) == pytest.approx(r, abs=1e-9)
-        assert kin.dist(p, c2) == pytest.approx(r, abs=1e-9)
+        assert np.linalg.norm(p - c1) == pytest.approx(r, abs=1e-9)
+        assert np.linalg.norm(p - c2) == pytest.approx(r, abs=1e-9)
 
 
 def test_circle_intersection_too_far_apart_returns_none():
@@ -40,20 +38,3 @@ def test_circle_intersection_one_inside_other_returns_none():
     # r1 and r2 differ by more than the center distance -> one circle
     # entirely contains the other, no intersection.
     assert kin.circle_intersection(c1, 10.0, c2, 1.0) is None
-
-
-def test_dist_matches_euclidean_norm():
-    assert kin.dist((0, 0), (3, 4)) == pytest.approx(5.0)
-
-
-def test_rot2_is_a_valid_rotation_matrix():
-    R = kin.rot2(math.pi / 2)
-    p = np.array([1.0, 0.0])
-    rotated = R @ p
-    assert rotated[0] == pytest.approx(0.0, abs=1e-9)
-    assert rotated[1] == pytest.approx(1.0, abs=1e-9)
-
-
-def test_apply_transform_translates_and_rotates():
-    T = kin.tf2(0.0, (5.0, 2.0))
-    assert kin.apply(T, (1.0, 1.0)) == pytest.approx([6.0, 3.0])

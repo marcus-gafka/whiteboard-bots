@@ -34,6 +34,10 @@ def test_auto_trajectory_from_sample():
     body = res.json()
     assert len(body["path"]) == len(body["rows"]) == 300
     assert body["unreachable"] == []
+    # Robot linkage for the simulation: static geometry plus one pose per move.
+    assert body["board"]["robot"]["home"] and body["board"]["robot"]["bases"]
+    assert body["pose_stride"] == 1 and len(body["poses"]) == 300
+    assert body["poses"][-1][:2] == pytest.approx(body["path"][-1], abs=1e-2)
 
 
 def test_uploaded_file_creates_job():
@@ -79,6 +83,8 @@ def test_manual_place_cut_undo_and_generate():
     assert state["placed"] == [[5, True]]
     # Reversed second half ends where the first half was cut.
     assert state["pen"] == pytest.approx(pts[len(pts) // 2 + 1], abs=1e-3)
+    # The linkage pose follows the pen.
+    assert state["pose"][:2] == pytest.approx(state["pen"], abs=1e-2)
 
     assert _act(jid, action="place", piece=5).status_code == 400  # already placed
 

@@ -10,6 +10,7 @@
     --border: #d9dde5; --accent: #2d6cdf; --accent-text: #ffffff; --accent-soft: #e6eefc;
     --board: #ffffff; --board-edge: #9aa3b2; --path: #1d2330;
     --connector: #e5484d; --danger: #c8242b; --danger-bg: #fdecec; --piece-l: 46%;
+    --link: #7c879b; --base: #4a5468;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -17,6 +18,7 @@
       --border: #2c323d; --accent: #5b8ef0; --accent-text: #0b0e13; --accent-soft: #1e2a42;
       --board: #0f1217; --board-edge: #5a6475; --path: #e6e9ef;
       --connector: #ff6b6f; --danger: #ff7a7f; --danger-bg: #3a1a1c; --piece-l: 62%;
+      --link: #6f7a8e; --base: #a3adbf;
     }
   }
   * { box-sizing: border-box; }
@@ -59,6 +61,10 @@
   .lg-conn::before { border-color: var(--connector) !important; border-top-style: dashed !important; }
   .lg-pool::before { border-color: hsl(200 70% var(--piece-l)) !important; opacity: .6; }
   .lg-home::before { display: none !important; }
+  .lg-robot::before { border-color: var(--link) !important; border-top-width: 4px !important; }
+  .robot-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted);
+          cursor: pointer; margin-left: auto; }
+  .stage svg.no-robot .robot { display: none; }
   .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   .toolbar .sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 4px; }
   .toolbar button[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent);
@@ -173,7 +179,9 @@
         <span class="lg-pool" id="lgPool" hidden>Not yet placed</span>
         <span class="lg-conn">Pen-down travel between pieces</span>
         <span class="lg-home">★ Home</span>
+        <span class="lg-robot">Robot linkage</span>
       </div>
+      <label class="robot-toggle"><input type="checkbox" id="showRobot" checked> Show robot</label>
     </div>
 
     <div class="toolbar" id="toolbar" hidden>
@@ -238,7 +246,7 @@ function fmtDuration(ms) {
   return m ? `${m} min ${s % 60} s` : `${s} s`;
 }
 function entitySummary(c) {
-  const parts = [["lines", "line"], ["circles", "circle"], ["arcs", "arc"], ["polylines", "polyline"], ["splines", "spline"]]
+  const parts = [["lines", "line"], ["circles", "circle"], ["arcs", "arc"], ["polylines", "polyline"], ["splines", "spline"], ["ellipses", "ellipse"]]
     .filter(([k]) => c[k]).map(([k, one]) => `${c[k]} ${c[k] === 1 ? one : k}`);
   return parts.join(", ") || "—";
 }
@@ -271,15 +279,66 @@ async function api(method, url, body) {
 }
 
 // Board frame: x right, y up. Returns { svg, g, sw } with g flipped into board coords.
+// The view covers the drawable board plus the robot's mechanism (bases, reach bounds).
 function makeBoard(board) {
-  const { width: W, height: H } = board, pad = Math.max(W, H) * 0.04;
-  const svg = el("svg", { viewBox: `${-pad} ${-pad} ${W + 2 * pad} ${H + 2 * pad}` });
+  const { width: W, height: H } = board, rg = board.robot;
+  let x0 = 0, y0 = 0, x1 = W, y1 = H;
+  if (rg) {
+    const [bx0, by0, bx1, by1] = rg.bounds;
+    const xs = [bx0, bx1, ...rg.bases.map(b => b[0])], ys = [by0, by1, ...rg.bases.map(b => b[1])];
+    x0 = Math.min(x0, ...xs); x1 = Math.max(x1, ...xs);
+    y0 = Math.min(y0, ...ys); y1 = Math.max(y1, ...ys);
+  }
+  const span = Math.max(x1 - x0, y1 - y0), pad = span * 0.04;
+  const svg = el("svg", { viewBox: `${x0 - pad} ${H - y1 - pad} ${x1 - x0 + 2 * pad} ${y1 - y0 + 2 * pad}` });
+  if (!$("showRobot").checked) svg.classList.add("no-robot");
   const g = el("g", { transform: `translate(0 ${H}) scale(1 -1)` }, svg);
-  const sw = Math.max(W, H) / 400;
+  const sw = span / 400;
   el("rect", { x: 0, y: 0, width: W, height: H, fill: "var(--board)", stroke: "var(--board-edge)",
     "stroke-width": sw, "stroke-dasharray": `${sw * 4} ${sw * 3}` }, g);
   return { svg, g, sw, H };
 }
+
+// Draws the robot's fixed bases and a linkage that can be re-posed.
+// A pose is a flat [x1, y1, x2, y2, ...] list, one quadruple per link (board frame).
+function makeRobot(g, rg, sw) {
+  const layer = el("g", { class: "robot", "pointer-events": "none" }, g);
+  const cable = rg.kind === "cable";
+  const linkLayer = el("g", {}, layer), jointLayer = el("g", {}, layer);
+  const n = ((rg.home || []).length / 4) | 0;
+  const links = [], joints = [];
+  for (let i = 0; i < n; i++) {
+    links.push(el("line", { stroke: "var(--link)", "stroke-width": sw * (cable ? 1 : 5),
+      "stroke-linecap": "round", "stroke-opacity": cable ? 0.9 : 0.55 }, linkLayer));
+    if (!cable) for (let k = 0; k < 2; k++)
+      joints.push(el("circle", { r: sw * 2.2, fill: "var(--board)", stroke: "var(--link)",
+        "stroke-width": sw }, jointLayer));
+  }
+  for (const [x, y] of rg.bases) {
+    const s = sw * 6;
+    el("rect", { x: x - s, y: y - s, width: 2 * s, height: 2 * s, rx: sw * 1.5, fill: "var(--base)" }, layer);
+    el("circle", { cx: x, cy: y, r: sw * 2, fill: "var(--board)" }, layer);
+  }
+  function set(pose) {
+    linkLayer.setAttribute("visibility", pose ? "visible" : "hidden");
+    jointLayer.setAttribute("visibility", pose ? "visible" : "hidden");
+    if (!pose) return;
+    links.forEach((ln, i) => {
+      const [a, b, c, d] = pose.slice(4 * i, 4 * i + 4);
+      ln.setAttribute("x1", a); ln.setAttribute("y1", b); ln.setAttribute("x2", c); ln.setAttribute("y2", d);
+      if (!cable) {
+        joints[2 * i].setAttribute("cx", a); joints[2 * i].setAttribute("cy", b);
+        joints[2 * i + 1].setAttribute("cx", c); joints[2 * i + 1].setAttribute("cy", d);
+      }
+    });
+  }
+  set(rg.home);
+  return { set };
+}
+$("showRobot").onchange = () => {
+  const svg = $("stage").querySelector("svg");
+  if (svg) svg.classList.toggle("no-robot", !$("showRobot").checked);
+};
 function addHome(svg, board, sw, H) {
   // Drawn outside the flipped group so the glyph isn't upside down.
   const star = el("text", { x: board.start[0], y: H - board.start[1], "font-size": sw * 14,
@@ -409,6 +468,7 @@ function renderPreview() {
     "stroke-width": sw * 1.5, "stroke-linejoin": "round", "stroke-linecap": "round" }, g);
   anim.drawn = el("polyline", { points: "", fill: "none", stroke: "var(--path)", "stroke-width": sw * 1.8,
     "stroke-linejoin": "round", "stroke-linecap": "round" }, g);
+  anim.robot = r.board.robot ? makeRobot(g, r.board.robot, sw) : null;
   anim.pen = el("circle", { r: sw * 4, fill: "var(--accent)", visibility: "hidden" }, g);
   for (const i of r.unreachable)
     el("circle", { cx: r.path[i][0], cy: r.path[i][1], r: sw * 3, fill: "var(--danger)" }, g);
@@ -446,8 +506,18 @@ function setProgress(i) {
     anim.pen.setAttribute("cx", pts[i - 1][0]); anim.pen.setAttribute("cy", pts[i - 1][1]);
     anim.pen.setAttribute("visibility", "visible");
   } else anim.pen.setAttribute("visibility", "hidden");
+  if (anim.robot) anim.robot.set(poseAfter(i));
   $("scrub").value = i;
 }
+// Linkage pose once `i` moves are done. Poses are sampled every `pose_stride`
+// moves (the last move always included); before any move, the robot is at home.
+function poseAfter(i) {
+  const r = app.result, poses = r.poses || [];
+  if (i <= 0 || !poses.length) return r.board.robot?.home ?? null;
+  const k = i - 1, last = poses.length - 1;
+  return poses[k >= r.rows.length - 1 ? last : Math.min(last, Math.round(k / (r.pose_stride || 1)))];
+}
+
 // Plays back at the real per-move timing from the trajectory, sped up.
 function tick(t) {
   if (!anim.playing) return;
@@ -470,7 +540,7 @@ function stop() { anim.playing = false; cancelAnimationFrame(anim.raf); $("play"
 $("play").onclick = () => anim.playing ? stop() : play();
 $("scrub").oninput = () => { stop(); setProgress(Number($("scrub").value)); };
 
-// Same tab-separated format paths/TrajectoryIO.py reads, so the CLI can replay it.
+// Tab-separated export of the previewed trajectory (one row per move).
 $("download").onclick = () => {
   const r = app.result;
   const lines = ["x\ty\ttheta1\ttheta2\tsteps1\tsteps2\tinterval",
@@ -539,6 +609,7 @@ function renderEditor() {
   }
 
   const hoverLayer = el("g", { "pointer-events": "none" }, g);
+  if (board.robot) makeRobot(g, board.robot, sw).set(m.pose ?? null);
   el("circle", { cx: m.pen[0], cy: m.pen[1], r: sw * 3.5, fill: "var(--accent)", "pointer-events": "none" }, g);
   addHome(svg, board, sw, H);
   $("stage").replaceChildren(svg);

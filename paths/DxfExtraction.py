@@ -3,6 +3,7 @@
 import math
 
 import numpy as np
+from ezdxf.math import Vec3
 
 INITIAL_SPACING = 0.02
 
@@ -33,11 +34,49 @@ def arc_to_points(center, radius, start_angle, end_angle, spacing):
     return points.tolist()
 
 
-def polyline_to_points(vertices, spacing):
+def bulge_arc_to_points(start, end, bulge, spacing):
+    """Points along a polyline arc segment. `bulge` is tan(sweep/4); positive
+    sweeps counter-clockwise from start to end. Both ends are kept exactly."""
+    start = np.asarray(start, dtype=float)
+    end = np.asarray(end, dtype=float)
+    chord_vec = end - start
+    chord = np.linalg.norm(chord_vec)
+    if chord == 0:
+        return [start.tolist(), end.tolist()]
+    sweep = 4.0 * math.atan(bulge)
+    radius = chord / (2.0 * abs(math.sin(sweep / 2.0)))
+    # Centre sits on the chord's perpendicular bisector, on the left of the
+    # travel direction for a CCW (positive) sweep under half a turn.
+    mid = (start + end) / 2.0
+    left = np.array([-chord_vec[1], chord_vec[0]]) / chord
+    center = mid + left * (chord / 2.0) / math.tan(sweep / 2.0)
+    a0 = math.atan2(start[1] - center[1], start[0] - center[0])
+    num_segments = max(int(abs(sweep) * radius / spacing), 1)
+    angles = a0 + np.linspace(0.0, sweep, num_segments + 1)
+    points = np.column_stack((center[0] + radius * np.cos(angles), center[1] + radius * np.sin(angles)))
+    points[0], points[-1] = start, end
+    return points.tolist()
+
+
+def polyline_to_points(vertices, spacing, bulges=None, closed=False, arc_spacing=None):
+    """Samples each segment separately so vertices (corners) are kept exactly.
+    bulges[i] curves the segment that starts at vertex i (0 = straight).
+    closed adds the segment from the last vertex back to the first."""
+    vertices = np.asarray(vertices, dtype=float)
+    n = len(vertices)
+    bulges = [0.0] * n if bulges is None else list(bulges)
+    arc_spacing = spacing if arc_spacing is None else arc_spacing
+
+    segments = [(i, i + 1) for i in range(n - 1)]
+    if closed and n >= 2 and (bulges[-1] or np.linalg.norm(vertices[-1] - vertices[0]) > 0):
+        segments.append((n - 1, 0))
+
     points = []
-    vertices = np.array(vertices)
-    for i in range(len(vertices) - 1):
-        points.extend(line_to_points(vertices[i], vertices[i + 1], spacing=spacing))
+    for i, j in segments:
+        if bulges[i]:
+            points.extend(bulge_arc_to_points(vertices[i], vertices[j], bulges[i], arc_spacing))
+        else:
+            points.extend(line_to_points(vertices[i], vertices[j], spacing=spacing))
     return points
 
 
@@ -62,18 +101,50 @@ def resample_polyline(vertices, spacing):
     return np.column_stack((np.interp(s, cum, pts[:, 0]), np.interp(s, cum, pts[:, 1]))).tolist()
 
 
-def spline_to_points(spline, spacing):
-    flattened = [(v.x, v.y) for v in spline.flattening(spacing * SPLINE_TOLERANCE_FRACTION)]
+def curve_to_points(entity, spacing):
+    """SPLINE or ELLIPSE (both WCS): flatten finely with ezdxf, then resample evenly."""
+    flattened = [(v.x, v.y) for v in entity.flattening(spacing * SPLINE_TOLERANCE_FRACTION)]
     return resample_polyline(flattened, spacing)
+
+
+def _to_wcs(entity, points, elevation=0.0):
+    """ARC/CIRCLE/polyline coordinates are in the entity's OCS. With the usual
+    +Z extrusion that's plain XY; a -Z extrusion (what CAD "mirror" produces)
+    flips X, which ignoring would draw the shape mirrored."""
+    ext = entity.dxf.get("extrusion", (0.0, 0.0, 1.0))
+    if abs(ext[0]) < 1e-12 and abs(ext[1]) < 1e-12 and ext[2] > 0:
+        return points
+    ocs = entity.ocs()
+    return [[v.x, v.y] for v in ocs.points_to_wcs(Vec3(x, y, elevation) for x, y in points)]
+
+
+def _polyline_parts(e):
+    """(vertices_xy, bulges, closed, elevation) for LWPOLYLINE / 2D-3D POLYLINE,
+    or None for POLYLINE meshes (not drawable as a single stroke)."""
+    if e.dxftype() == "LWPOLYLINE":
+        pts = list(e.get_points("xyb"))
+        return [(x, y) for x, y, _ in pts], [b for _, _, b in pts], e.closed, e.dxf.elevation
+    if e.is_poly_face_mesh or e.is_polygon_mesh:
+        return None
+    vs = list(e.vertices)
+    verts = [(v.dxf.location.x, v.dxf.location.y) for v in vs]
+    # 3D polylines are already WCS and have no bulges.
+    bulges = [0.0] * len(vs) if e.is_3d_polyline else [v.dxf.get("bulge", 0.0) for v in vs]
+    elevation = vs[0].dxf.location.z if vs and e.is_2d_polyline else 0.0
+    return verts, bulges, e.is_closed, elevation
 
 
 def extract_geometries(doc, spacing):
     """Returns (geometries, counts). counts maps 'lines', 'circles', 'arcs',
-    'polylines', 'splines' to how many of each were converted, and
-    'skipped' to {dxftype: count} for entities that aren't supported."""
+    'polylines', 'splines', 'ellipses' to how many of each were converted,
+    and 'skipped' to {dxftype: count} for entities that aren't supported."""
     msp = doc.modelspace()
     geometries = []
-    counts = {"lines": 0, "circles": 0, "arcs": 0, "polylines": 0, "splines": 0, "skipped": {}}
+    counts = {"lines": 0, "circles": 0, "arcs": 0, "polylines": 0, "splines": 0, "ellipses": 0,
+              "skipped": {}}
+
+    def skip(kind):
+        counts["skipped"][kind] = counts["skipped"].get(kind, 0) + 1
 
     for e in msp:
         kind = e.dxftype()
@@ -83,35 +154,33 @@ def extract_geometries(doc, spacing):
             geometries.append(line_to_points(start, end, spacing))
             counts["lines"] += 1
 
-        elif kind == 'CIRCLE':
+        elif kind in ('CIRCLE', 'ARC'):
             center = (e.dxf.center.x, e.dxf.center.y)
             radius = e.dxf.radius
-            geometries.append(arc_to_points(center, radius, 0, 360, spacing * 2))
-            counts["circles"] += 1
-
-        elif kind == 'ARC':
-            center = (e.dxf.center.x, e.dxf.center.y)
-            radius = e.dxf.radius
-            geometries.append(arc_to_points(center, radius, e.dxf.start_angle, e.dxf.end_angle, spacing * 2))
-            counts["arcs"] += 1
+            a0, a1 = (0, 360) if kind == 'CIRCLE' else (e.dxf.start_angle, e.dxf.end_angle)
+            pts = arc_to_points(center, radius, a0, a1, spacing * 2)
+            geometries.append(_to_wcs(e, pts, e.dxf.center.z))
+            counts["circles" if kind == 'CIRCLE' else "arcs"] += 1
 
         elif kind in ('LWPOLYLINE', 'POLYLINE'):
-            vertices = []
-            if kind == 'LWPOLYLINE':
-                vertices = [(pt[0], pt[1]) for pt in e]
-            else:  # POLYLINE
-                for v in e.vertices:
-                    loc = v.dxf.location
-                    vertices.append((loc.x, loc.y))
-            geometries.append(polyline_to_points(vertices, spacing * 3))
+            parts = _polyline_parts(e)
+            if parts is None:
+                skip("POLYLINE (mesh)")
+                continue
+            vertices, bulges, closed, elevation = parts
+            # Straight runs keep their historical density; curved (bulge)
+            # segments use the same density as ARC entities.
+            pts = polyline_to_points(vertices, spacing * 3, bulges=bulges, closed=closed,
+                                     arc_spacing=spacing * 2)
+            geometries.append(_to_wcs(e, pts, elevation))
             counts["polylines"] += 1
 
-        elif kind == 'SPLINE':
-            # Same density as arcs: both are smooth curves.
-            geometries.append(spline_to_points(e, spacing * 2))
-            counts["splines"] += 1
+        elif kind in ('SPLINE', 'ELLIPSE'):
+            # Same density as arcs: smooth curves.
+            geometries.append(curve_to_points(e, spacing * 2))
+            counts["splines" if kind == 'SPLINE' else "ellipses"] += 1
 
         else:
-            counts["skipped"][kind] = counts["skipped"].get(kind, 0) + 1
+            skip(kind)
 
     return geometries, counts

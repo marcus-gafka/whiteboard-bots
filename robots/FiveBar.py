@@ -1,7 +1,9 @@
 import math
+
 import numpy as np
-from robots.Robot import Robot
+
 from robots import Kinematics as kin
+from robots.Robot import Robot
 
 
 class FiveBar(Robot):
@@ -9,11 +11,11 @@ class FiveBar(Robot):
     name = "FiveBar"
 
     # Link lengths
-    l1 = 3.0  
-    l2 = 6.0  
-    l3 = 7.5  
-    l4 = 7.5  
-    l5 = 6.0  
+    l1 = 3.0
+    l2 = 6.0
+    l3 = 7.5
+    l4 = 7.5
+    l5 = 6.0
     a  = 1.125
 
     # Drawing Area
@@ -31,7 +33,7 @@ class FiveBar(Robot):
     MAX_PLOT_Y = 12
 
     def ik(self, x, y):
-        x, y = self.apply_board_offset(x,y)
+        x, y = self.apply_board_offset(x, y)
 
         d = math.hypot(x - self.l1, y)
         theta2 = (
@@ -64,7 +66,7 @@ class FiveBar(Robot):
 
         return math.degrees(theta1), math.degrees(theta2)
 
-    def _forward_points(self, theta1_deg, theta2_deg, elbow_up=True):
+    def fk(self, theta1_deg, theta2_deg):
         t1 = math.radians(theta1_deg)
         t2 = math.radians(theta2_deg)
 
@@ -76,74 +78,23 @@ class FiveBar(Robot):
         C = A + self.l5 * np.array([math.cos(t1), math.sin(t1)])
         D = B + self.l2 * np.array([math.cos(t2), math.sin(t2)])
 
-        # End-effector via loop closure (l3-l4 intersection)
-        E = kin.circle_intersection(
-            C, self.l4,
-            D, self.l3,
-            elbow_up=elbow_up
-        )
+        # Loop closure (l3-l4 intersection)
+        E = kin.circle_intersection(C, self.l4, D, self.l3)
 
-        return A, B, C, D, E, t1, t2
+        # The tip extends past E along l3 by "a"
+        vec_l3 = E - D
+        tip = E + (self.a / np.linalg.norm(vec_l3)) * vec_l3
 
-    def fk(self, theta1_deg, theta2_deg, elbow_up=True):
-        A, B, C, D, E, _t1, _t2 = self._forward_points(theta1_deg, theta2_deg, elbow_up)
+        return {"A": A, "B": B, "C": C, "D": D, "E": E, "tip": tip}
 
-        # Tip position offset along l3 (adds "a")
-        vec_l3 = E - D           # vector along l3
-        length_l3 = np.linalg.norm(vec_l3)
-        tip = E + (self.a / length_l3) * vec_l3  # tip extends along l3
-
-        return {
-            "A": A,
-            "B": B,
-            "C": C,
-            "D": D,
-            "E": E,
-            "tip": tip
-        }
-
-    # -------------------------------------------------
-    # Plot-ready link structure
-    # -------------------------------------------------
     def get_links(self, theta1_deg, theta2_deg):
         pts = self.fk(theta1_deg, theta2_deg)
-
         return [
-            (pts["tip"], pts["D"]), # always put "tip" first
-            (pts["A"], pts["C"]),  
-            (pts["C"], pts["E"]),  
-            (pts["D"], pts["B"])   
+            (pts["tip"], pts["D"]),
+            (pts["A"], pts["C"]),
+            (pts["C"], pts["E"]),
+            (pts["D"], pts["B"]),
         ]
-    
-    def jacobian(self, theta1_deg, theta2_deg, elbow_up=True):
-        _A, _B, C, D, E, t1, t2 = self._forward_points(theta1_deg, theta2_deg, elbow_up)
 
-        # Partial derivatives of F = |E-C|^2 - l4^2
-        Fx = 2 * (E[0] - C[0])
-        Fy = 2 * (E[1] - C[1])
-        Ftheta1 = -2 * (E[0] - C[0]) * (-self.l5 * math.sin(t1)) \
-                -2 * (E[1] - C[1]) * (self.l5 * math.cos(t1))
-
-        # Partial derivatives of G = |E-D|^2 - l3^2
-        Gx = 2 * (E[0] - D[0])
-        Gy = 2 * (E[1] - D[1])
-        Gtheta2 = -2 * (E[0] - D[0]) * (-self.l2 * math.sin(t2)) \
-                -2 * (E[1] - D[1]) * (self.l2 * math.cos(t2))
-
-        # Solve for dE/dθ1
-        J = np.zeros((2, 2))
-        M = np.array([[Fx, Fy],
-                    [Gx, Gy]])
-
-        # dE/dθ1
-        rhs1 = np.array([-Ftheta1, 0.0])
-        dE_dtheta1 = np.linalg.solve(M, rhs1)
-
-        # dE/dθ2
-        rhs2 = np.array([0.0, -Gtheta2])
-        dE_dtheta2 = np.linalg.solve(M, rhs2)
-
-        J[:, 0] = dE_dtheta1
-        J[:, 1] = dE_dtheta2
-
-        return J
+    def get_bases(self):
+        return [(0.0, 0.0), (self.l1, 0.0)]

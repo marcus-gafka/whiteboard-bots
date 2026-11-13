@@ -1,0 +1,234 @@
+WHITEBOARD BOTS - CODEBASE CLEANUP REPORT
+Branch: webapp            Date: 2026-11-13            Baseline: commit 001198b
+
+GOAL
+  The web app is now the only workflow: every trajectory is generated,
+  previewed and sent to the robot through it, over USB serial (or the
+  "Simulated (no robot)" port, kept on purpose for testing without hardware).
+  Everything that only served the old terminal CLI / matplotlib workflow was
+  removed, along with unused helpers, dead parameters and duplicated code.
+
+  Everything removed is recoverable from git history (commit 001198b).
+
+RESULT
+  Test suite: 92 passed in ~10 s, peak memory ~210 MB
+  (before: ~2 min 10 s and ~13 GB peak, which got the terminal OOM-killed).
+  Every file in the repo was reviewed; per-file details follow.
+
+  Line counts are "baseline -> now". Some files grew because the branch also
+  holds uncommitted feature work that was kept (ELLIPSE / bulge / mirrored
+  entity support in DxfExtraction, the robot-linkage preview in pipeline,
+  server and index.html), not because of this cleanup.
+
+
+================================================================================
+DELETED FILES
+================================================================================
+
+main.py  (303 lines)
+  The interactive terminal CLI: robot/mode prompts, file pickers,
+  "preselection" mode, matplotlib preview plot, comms selection and the
+  post-run animation. Replaced entirely by the web app.
+
+Plotter.py  (175 lines)
+  matplotlib FuncAnimation of the robot (link lines, trace, manipulability
+  heatmap, velocity ellipse). Only main.py used it; the web preview now draws
+  and animates the linkage itself.
+
+robots/ManipulabilityGrid.py  (43 lines)
+  Board-space manipulability heatmap. Only Plotter.py used it.
+
+paths/PointsIO.py  (19 lines)
+  Saved the "_<name>_<n>.txt" points file. Only main.py used it.
+
+paths/TrajectoryIO.py  (36 lines)
+  Saved/loaded the per-robot trajectory .txt for the CLI's "run from saved
+  TXT" mode. Only main.py used it. (The web app's "Download trajectory .txt"
+  button still exports the same columns from the browser.)
+
+comms/NetworkComms.py  (26 lines)
+  TCP socket transport. Only main.py could select it; the web app talks to the
+  robot over serial.
+
+comms/PsuedoComms.py  (42 lines)
+  Misspelled dry-run stub that printed commands and bypassed the ack
+  protocol. Replaced by comms/SimulatedComms.py (see below).
+
+tests/test_plotter.py  (43 lines), tests/test_manipulability_grid.py  (33 lines)
+  Tests for the two deleted modules.
+
+.TXTS/  (7 files, 4,609 lines)
+  Generated CLI output (_gompei_*.txt, Spooler_gompei_*.txt,
+  FiveBar_gompei_1000.txt) that had been committed. Nothing reads them now.
+
+
+================================================================================
+ADDED FILES
+================================================================================
+
+comms/SimulatedComms.py  (20 lines)
+  Backs the web app's "Simulated (no robot)" port. Unlike PsuedoComms it goes
+  through the real CommsBase.send_steps() protocol path: it "receives" each
+  command and replies DONE after the move's real duration, so a simulated run
+  behaves exactly like a serial one (timeouts included).
+
+
+================================================================================
+MODIFIED FILES
+================================================================================
+
+Constants.py  (17 -> 10)
+  Cut: TXT_FOLDER, DEFAULT_SERIAL_PORT ("COM3" - the web app always passes the
+  chosen port), DEFAULT_NETWORK_IP, DEFAULT_NETWORK_PORT.
+  Kept: DXF_FOLDER, ACK_TOKEN, DEFAULT_SERIAL_BAUD.
+
+comms/CommsBase.py  (53 -> 46)
+  Cut: long docstrings describing the multi-backend design; the explicit
+  `pass` in prepare(). Protocol and behaviour unchanged.
+
+comms/SerialComms.py  (47 -> 49)
+  Cut: fallback to Constants defaults (port and baud are now required
+  arguments) and the Constants import. Imports split onto separate lines
+  (that is the small line increase).
+
+core/pipeline.py  (123 -> 157; growth is the linkage-preview feature)
+  Cut: the Extraction dataclass (extract() now returns (geometries, counts));
+  read_dxf_file() - samples are now read as bytes and parsed by the single
+  read_dxf() (renamed from read_dxf_bytes), so uploads and samples share one
+  path; bounding_box() (its only use was a field nobody read); auto_order(),
+  a one-line wrapper (server calls PathOrdering directly); the
+  "shared by CLI and web app" framing; START_X/START_Y use (now START_XY).
+  Fixed: the "no drawable entities" message now mentions ELLIPSE.
+
+core/runner.py  (149 -> 144)
+  Cut: the unused `active` property.
+
+paths/DxfExtraction.py  (117 -> 186; growth is the kept ELLIPSE/bulge work)
+  Cut: the unused `spline_to_points = curve_to_points` alias.
+
+paths/GeometryTransform.py  (43 -> 24)
+  Cut: print_bounding_box() (CLI only), dist_points() (imported by
+  PathOrdering but never called). scale_and_translate_geometries() rewritten
+  without the per-geometry loop and without Robot.get_aspect_ratio(); same
+  output.
+
+paths/ManualOrder.py  (372 -> 135)
+  Cut: the whole matplotlib CLI session (ManualOrderSession,
+  prompt_manual_order, ManualOrderAborted, typed "cut <#>" / "<#>r"
+  commands, ginput clicking); pick_colors() and color_for_piece() (matplotlib
+  colouring - the web UI colours by root id); typed pool labels
+  (renumber_pool, pool_display, pool_reverse, id_for_label); child_path
+  (only fed the CLI colours); check_cuttable() folded into cut(); undo
+  history entries no longer carry CLI labels. ManualOrderState behaviour used
+  by the web app is unchanged (place, place_many, cut, cut_at_point, undo,
+  pen_position, ordered_path).
+
+paths/PathOrdering.py  (92 -> 61)
+  Cut: geometry_dist_to_start() and geometry_distance() - the old
+  per-pair versions, superseded by the vectorized tsp_order_indices();
+  the unused dist_points import. reduce_points() condensed; same output.
+
+robots/Robot.py  (112 -> 73)
+  Cut: jacobian() from the abstract contract, is_singular(), mobility(),
+  manipulability() (all only fed Plotter/ManipulabilityGrid);
+  get_aspect_ratio(), get_drawable_center(), get_drawable_box() (unused);
+  START_X / START_Y duplicates of START_XY; numpy/math imports.
+  calc_steps() parameters renamed to snake_case; behaviour unchanged.
+
+robots/FiveBar.py  (149 -> 100)
+  Cut: jacobian(); _forward_points() (only existed to share code with
+  jacobian - folded into fk()); the unused elbow_up parameter.
+
+robots/Spooler.py  (122 -> 76)
+  Cut: jacobian(); the extra "l1"/"l2" keys returned by fk() (never read);
+  _tip_from_lengths() folded into fk().
+
+robots/TwoLink.py  (101 -> 55)
+  Cut: jacobian(); the unused elbow_up parameter of fk(); the acos
+  clamp in ik(). Behaviour change: the clamp silently turned out-of-reach
+  points into a fully stretched arm, so the web app's "outside the robot's
+  reach" check never fired for TwoLink. ik() now raises like the other
+  robots and unreachable points are flagged (red dots). Every point on its
+  7x7 board is reachable, so normal drawings are unaffected.
+
+robots/Kinematics.py  (57 -> 18)
+  Cut: rot2(), tf2(), apply(), dist() - unused. Only circle_intersection()
+  remains (FiveBar and Spooler use it).
+
+webapp/server.py  (393 -> 392)
+  Cut: PsuedoComms (simulated port now uses SimulatedComms); source_bbox
+  (computed and sent, never read by the page); total_points in the
+  /api/jobs response (never read); the separate read-file path for samples;
+  duplicated "create manual state if missing" blocks; RunRequest now extends
+  PortRequest instead of repeating port/baud. Docstring now states the
+  web app is the only front end.
+
+webapp/static/index.html  (738 -> 809; growth is the linkage preview)
+  Fixed: ELLIPSE entities were counted but never shown in the Entities
+  stat. Updated the download comment that pointed at the deleted
+  TrajectoryIO / CLI.
+
+requirements.txt  (10 -> 9)
+  Cut: matplotlib (nothing imports it any more).
+
+conftest.py  (8 -> 3)
+  Cut: forcing matplotlib's Agg backend (no matplotlib left). Kept the file
+  itself: it puts the repo root on sys.path for tests.
+
+README.md  (68 -> 65)
+  Cut: the CLI section and the "CLI can replay it" note. Layout table
+  updated (runner, comms contents); mentions the linkage preview.
+
+
+================================================================================
+TESTS
+================================================================================
+
+tests/test_dxf_extraction.py
+  Fixed the terminal crashes: the sample-geometry check broadcast 200 points
+  against a ~1-2 million point reference at once (several GB per step, ~13 GB
+  peak) and got Konsole OOM-killed. It now measures distance to the exact
+  flattened outline segments in memory-bounded chunks: 213 MB peak, and the
+  suite runs in ~10 s instead of ~2 min. Tolerances are unchanged; the
+  on-curve check is now against the exact outline (slightly stricter), and
+  the coverage check spot-checks 400 outline points instead of 2,000.
+
+tests/test_manual_order.py  (260 -> 84)
+  Cut: the scripted matplotlib CLI session tests and the pick_colors /
+  color_for_piece / renumber_pool tests (code removed). Kept every
+  ManualOrderState test and the pure-helper tests.
+
+tests/test_comms.py
+  Cut: PsuedoComms tests. Added a SimulatedComms test (acks after the move's
+  duration via the real protocol).
+
+tests/test_kinematics.py
+  Cut: rot2 / tf2 / apply / dist tests (code removed).
+
+tests/test_geometry_transform.py
+  Cut: dist_points test; the fake robot no longer needs get_aspect_ratio.
+
+tests/test_robots.py
+  Cut: the Jacobian/singularity test and the stub jacobian() in the
+  abstract-contract test.
+
+tests/test_pipeline.py
+  Updated for read_dxf / extract() tuple / START_XY. The unreachable-point
+  test now also covers TwoLink.
+
+tests/test_path_ordering.py
+  Updated a comment that referenced the deleted geometry_dist_to_start().
+
+tests/test_runner.py, tests/test_webapp.py
+  No changes needed; both pass (the simulated-run tests now run through
+  SimulatedComms).
+
+
+================================================================================
+REVIEWED, UNCHANGED
+================================================================================
+
+.gitignore             Already covers caches, .venv, node_modules.
+.vscode/settings.json  Personal editor colours; not code, left alone.
+.DXFS/*.dxf            Sample drawings offered by the web app.
+Stale __pycache__ folders for deleted modules were removed (untracked).
