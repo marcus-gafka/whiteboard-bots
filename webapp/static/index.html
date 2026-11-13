@@ -237,6 +237,11 @@ function fmtDuration(ms) {
   const s = Math.round(ms / 1000), m = Math.floor(s / 60);
   return m ? `${m} min ${s % 60} s` : `${s} s`;
 }
+function entitySummary(c) {
+  const parts = [["lines", "line"], ["circles", "circle"], ["arcs", "arc"], ["polylines", "polyline"], ["splines", "spline"]]
+    .filter(([k]) => c[k]).map(([k, one]) => `${c[k]} ${c[k] === 1 ? one : k}`);
+  return parts.join(", ") || "—";
+}
 function setStats(rows) {
   $("stats").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
   $("stats").hidden = !rows.length;
@@ -414,14 +419,19 @@ function renderPreview() {
   setStats([
     ["Drawing", `${app.job.source} on ${r.robot}`],
     ["Order", r.mode === "manual" ? "Manual" : "Auto (nearest neighbour)"],
-    ["Entities", `${c.lines} lines, ${c.circles} circles, ${c.arcs} arcs, ${c.polylines} polylines`],
+    ["Entities", entitySummary(c)],
     ["Pieces", r.pieces.length],
     ["Travel between pieces", travelLength(r.board.start, r.pieces).toFixed(2)],
     ["Points", `${n.toLocaleString()} of ${r.total_points.toLocaleString()}`],
     ["Est. draw time", r.rows.length ? fmtDuration(r.duration_ms) : "—"],
   ]);
+  const warnings = [];
   if (r.unreachable.length)
-    showError(`${r.unreachable.length} point(s) are outside ${r.robot}'s reach (red dots). No trajectory was generated.`);
+    warnings.push(`${r.unreachable.length} point(s) are outside ${r.robot}'s reach (red dots). No trajectory was generated.`);
+  const skipped = Object.entries(c.skipped || {});
+  if (skipped.length)
+    warnings.push(`Not drawn (unsupported in this DXF): ${skipped.map(([k, n]) => `${n} ${k}`).join(", ")}.`);
+  if (warnings.length) showError(warnings.join(" "));
 
   setChrome({ editor: false });
   $("scrub").max = n;

@@ -142,8 +142,11 @@ def run_dxf_pipeline(robot, preselection, order_mode, file_index):
     print(f"\nUsing DXF: {dxf_path}")
 
     doc = ezdxf.readfile(dxf_path)
-    geometries, lines, circles, arcs, polylines = dxf_extraction.extract_geometries(doc, dxf_extraction.INITIAL_SPACING)
-    print(f"\nExtracted {len(geometries)} geometries: {lines} lines, {circles} circles, {arcs} arcs, {polylines} polylines")
+    geometries, counts = dxf_extraction.extract_geometries(doc, dxf_extraction.INITIAL_SPACING)
+    print(f"\nExtracted {len(geometries)} geometries: {counts['lines']} lines, {counts['circles']} circles, "
+          f"{counts['arcs']} arcs, {counts['polylines']} polylines, {counts['splines']} splines")
+    if counts["skipped"]:
+        print("Skipped unsupported entities: " + ", ".join(f"{n} {k}" for k, n in sorted(counts["skipped"].items())))
 
     all_points = [pt for geometry in geometries for pt in geometry]
     print("\nBounding box BEFORE scaling & translation:")

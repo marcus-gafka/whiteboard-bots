@@ -28,7 +28,7 @@ class PipelineError(Exception):
 @dataclass
 class Extraction:
     geometries: list            # list of point lists, in DXF units
-    counts: dict = field(default_factory=dict)  # entity type -> count
+    counts: dict = field(default_factory=dict)  # entity kind -> count, plus 'skipped': {dxftype: n}
 
 
 def make_robot(name):
@@ -56,12 +56,13 @@ def read_dxf_bytes(data):
 
 
 def extract(doc, spacing=dxf_extraction.INITIAL_SPACING):
-    geometries, lines, circles, arcs, polylines = dxf_extraction.extract_geometries(doc, spacing)
+    geometries, counts = dxf_extraction.extract_geometries(doc, spacing)
     # Drop degenerate geometries (fewer than 2 points can't be drawn as a stroke).
     geometries = [g for g in geometries if len(g) >= 2]
     if not geometries:
-        raise PipelineError("No drawable LINE, CIRCLE, ARC or POLYLINE entities found in the DXF.")
-    counts = {"lines": lines, "circles": circles, "arcs": arcs, "polylines": polylines}
+        skipped = ", ".join(sorted(counts["skipped"])) or "none"
+        raise PipelineError("No drawable LINE, CIRCLE, ARC, POLYLINE or SPLINE entities found in the DXF "
+                            f"(unsupported entities present: {skipped}).")
     return Extraction(geometries, counts)
 
 
