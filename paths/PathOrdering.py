@@ -45,19 +45,28 @@ def tsp_geometry_order(robot, geometries):
 
     path.append(current_geometry)
 
-    for _ in range(n - 1):
-        best_dist = float('inf')
-        best_index = None
-        best_geom_reversed = False
+    # Vectorized form of calling geometry_distance(path[-1], g) for every
+    # unvisited g: same four candidate pairings, same tie-breaking (first
+    # candidate in that order, then lowest index), but O(n) numpy per step
+    # instead of O(n) Python calls — matters for DXFs with thousands of LINEs.
+    starts = np.array([g[0] for g in geometries], dtype=float)
+    ends = np.array([g[-1] for g in geometries], dtype=float)
 
-        for i in range(n):
-            if visited[i]:
-                continue
-            dist, _, rev_next = geometry_distance(path[-1], geometries[i])
-            if dist < best_dist:
-                best_dist = dist
-                best_index = i
-                best_geom_reversed = rev_next
+    for _ in range(n - 1):
+        prev_start = np.asarray(path[-1][0], dtype=float)
+        prev_end = np.asarray(path[-1][-1], dtype=float)
+        candidates = np.stack([
+            np.linalg.norm(starts - prev_end, axis=1),    # end -> start
+            np.linalg.norm(ends - prev_end, axis=1),      # end -> end (reverse next)
+            np.linalg.norm(starts - prev_start, axis=1),  # start -> start
+            np.linalg.norm(ends - prev_start, axis=1),    # start -> end (reverse next)
+        ], axis=1)
+        which = np.argmin(candidates, axis=1)
+        dists = candidates[np.arange(n), which]
+        dists[visited] = np.inf
+
+        best_index = int(np.argmin(dists))
+        best_geom_reversed = bool(which[best_index] in (1, 3))
 
         next_geom = geometries[best_index]
         if best_geom_reversed:
