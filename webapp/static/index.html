@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Whiteboard Bots</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085;
+    --border: #d9dde5; --accent: #2d6cdf; --accent-text: #ffffff;
+    --board: #ffffff; --board-edge: #9aa3b2; --path: #1d2330;
+    --connector: #e5484d; --danger: #c8242b; --danger-bg: #fdecec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b1f27; --text: #e6e9ef; --muted: #98a2b3;
+      --border: #2c323d; --accent: #5b8ef0; --accent-text: #0b0e13;
+      --board: #0f1217; --board-edge: #5a6475; --path: #e6e9ef;
+      --connector: #ff6b6f; --danger: #ff7a7f; --danger-bg: #3a1a1c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); }
+  .app { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; }
+  aside { background: var(--panel); border-right: 1px solid var(--border); padding: 20px;
+          display: flex; flex-direction: column; gap: 18px; }
+  h1 { font-size: 17px; margin: 0; }
+  label.field { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 13px; }
+  .hint { font-weight: 400; color: var(--muted); font-size: 12px; }
+  select, input[type=number] { font: inherit; padding: 7px 9px; border: 1px solid var(--border);
+          border-radius: 6px; background: var(--bg); color: var(--text); }
+  .drop { border: 1.5px dashed var(--border); border-radius: 8px; padding: 16px; text-align: center;
+          color: var(--muted); cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop.over, .drop:hover { border-color: var(--accent); }
+  .drop strong { color: var(--text); display: block; word-break: break-all; }
+  .or { text-align: center; color: var(--muted); font-size: 12px; margin: -6px 0; }
+  button { font: inherit; font-weight: 600; padding: 9px 12px; border-radius: 6px; cursor: pointer;
+           border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  .stats { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; margin: 0; }
+  .stats dt { color: var(--muted); }
+  .stats dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
+  .error { background: var(--danger-bg); color: var(--danger); padding: 10px 12px; border-radius: 6px;
+           font-size: 13px; }
+  main { padding: 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 300px; }
+  svg { width: 100%; max-height: calc(100vh - 110px); }
+  .empty { color: var(--muted); }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+  .legend span::before { content: ""; display: inline-block; width: 18px; height: 0;
+          vertical-align: middle; margin-right: 6px; border-top: 2px solid; }
+  .lg-home::before { display: none !important; }
+  .lg-path::before { border-color: var(--path) !important; }
+  .lg-conn::before { border-color: var(--connector) !important; border-top-style: dashed !important; }
+  .player { display: flex; gap: 10px; align-items: center; }
+  .player input[type=range] { flex: 1; }
+  [hidden] { display: none !important; }
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; }
+    aside { border-right: 0; border-bottom: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <h1>Whiteboard Bots</h1>
+
+    <label class="field">Robot
+      <select id="robot"></select>
+    </label>
+
+    <div class="field">
+      <div id="drop" class="drop" tabindex="0">
+        <strong id="dropName">Drop a .dxf here</strong>
+        or click to browse
+      </div>
+      <input id="file" type="file" accept=".dxf" hidden>
+    </div>
+    <div class="or">or</div>
+    <label class="field">Sample drawing
+      <select id="sample"><option value="">—</option></select>
+    </label>
+
+    <label class="field">Point count <span class="hint">Leave blank to keep every point (can be 100k+)</span>
+      <input id="points" type="number" min="2" step="1" placeholder="all" value="1000">
+    </label>
+
+    <button id="go" class="primary" disabled>Process</button>
+    <div id="error" class="error" hidden></div>
+
+    <dl id="stats" class="stats" hidden></dl>
+    <button id="download" hidden>Download trajectory .txt</button>
+  </aside>
+
+  <main>
+    <div class="legend">
+      <span class="lg-path">Drawn path</span>
+      <span class="lg-conn">Pen-down travel between pieces</span>
+      <span class="lg-home">★ Home</span>
+    </div>
+    <div class="stage" id="stage"><p class="empty">Choose a drawing and press Process.</p></div>
+    <div class="player" id="player" hidden>
+      <button id="play">Play</button>
+      <input id="scrub" type="range" min="0" value="0">
+      <select id="speed" title="Playback speed">
+        <option value="1">1×</option><option value="5">5×</option>
+        <option value="20" selected>20×</option><option value="100">100×</option>
+      </select>
+    </div>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const SVGNS = "http://www.w3.org/2000/svg";
+let robots = [], chosenFile = null, result = null;
+let anim = { playing: false, idx: 0, raf: 0, last: 0, carry: 0 };
+
+async function init() {
+  try {
+    robots = await (await fetch("/api/robots")).json();
+    $("robot").innerHTML = robots.map(r => `<option>${r.name}</option>`).join("");
+    const samples = await (await fetch("/api/samples")).json();
+    $("sample").innerHTML += samples.map(s => `<option>${s}</option>`).join("");
+  } catch (e) { showError("Could not reach the server."); }
+}
+
+function setFile(f) {
+  chosenFile = f;
+  $("dropName").textContent = f ? f.name : "Drop a .dxf here";
+  if (f) $("sample").value = "";
+  updateGo();
+}
+function updateGo() { $("go").disabled = !(chosenFile || $("sample").value); }
+function showError(msg) { $("error").textContent = msg; $("error").hidden = !msg; }
+
+$("drop").onclick = () => $("file").click();
+$("drop").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") $("file").click(); };
+$("file").onchange = () => setFile($("file").files[0] || null);
+$("drop").ondragover = (e) => { e.preventDefault(); $("drop").classList.add("over"); };
+$("drop").ondragleave = () => $("drop").classList.remove("over");
+$("drop").ondrop = (e) => {
+  e.preventDefault(); $("drop").classList.remove("over");
+  if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+};
+$("sample").onchange = () => { if ($("sample").value) { chosenFile = null; $("file").value = "";
+  $("dropName").textContent = "Drop a .dxf here"; } updateGo(); };
+
+$("go").onclick = async () => {
+  showError("");
+  const fd = new FormData();
+  fd.append("robot", $("robot").value);
+  if ($("points").value) fd.append("points", $("points").value);
+  if (chosenFile) fd.append("file", chosenFile); else fd.append("sample", $("sample").value);
+  $("go").disabled = true; $("go").textContent = "Processing…";
+  try {
+    const res = await fetch("/api/process", { method: "POST", body: fd });
+    const body = await res.json();
+    if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : "Request failed.");
+    result = body;
+    render();
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    $("go").textContent = "Process"; updateGo();
+  }
+};
+
+function fmtDuration(ms) {
+  const s = Math.round(ms / 1000), m = Math.floor(s / 60);
+  return m ? `${m} min ${s % 60} s` : `${s} s`;
+}
+
+function render() {
+  stop();
+  const r = result, { width: W, height: H } = r.board, pad = Math.max(W, H) * 0.04;
+  const svg = document.createElementNS(SVGNS, "svg");
+  svg.setAttribute("viewBox", `${-pad} ${-pad} ${W + 2 * pad} ${H + 2 * pad}`);
+  // Board y points up; flip once with a group transform.
+  const g = el("g", { transform: `translate(0 ${H}) scale(1 -1)` });
+  svg.appendChild(g);
+  const sw = Math.max(W, H) / 400;
+
+  g.appendChild(el("rect", { x: 0, y: 0, width: W, height: H, fill: "var(--board)",
+    stroke: "var(--board-edge)", "stroke-width": sw, "stroke-dasharray": `${sw * 4} ${sw * 3}` }));
+
+  // Connectors: home -> first piece, and end of each piece -> start of the next.
+  let prev = r.board.start;
+  for (const piece of r.pieces) {
+    g.appendChild(el("line", { x1: prev[0], y1: prev[1], x2: piece[0][0], y2: piece[0][1],
+      stroke: "var(--connector)", "stroke-width": sw * 1.2, "stroke-dasharray": `${sw * 3} ${sw * 2}` }));
+    prev = piece[piece.length - 1];
+  }
+
+  const ghost = el("polyline", { points: r.path.map(p => p.join(",")).join(" "), fill: "none",
+    stroke: "var(--path)", "stroke-opacity": 0.25, "stroke-width": sw * 1.5,
+    "stroke-linejoin": "round", "stroke-linecap": "round" });
+  const drawn = el("polyline", { points: "", fill: "none", stroke: "var(--path)",
+    "stroke-width": sw * 1.8, "stroke-linejoin": "round", "stroke-linecap": "round" });
+  const pen = el("circle", { r: sw * 4, fill: "var(--accent)", visibility: "hidden" });
+  g.append(ghost, drawn, pen);
+
+  for (const i of r.unreachable)
+    g.appendChild(el("circle", { cx: r.path[i][0], cy: r.path[i][1], r: sw * 3, fill: "var(--danger)" }));
+
+  // Home marker drawn un-flipped so the glyph isn't upside down.
+  const star = el("text", { x: r.board.start[0], y: H - r.board.start[1], "font-size": sw * 14,
+    "text-anchor": "middle", "dominant-baseline": "central", fill: "var(--text)" });
+  star.textContent = "★";
+  svg.appendChild(star);
+
+  $("stage").replaceChildren(svg);
+  anim.drawn = drawn; anim.pen = pen;
+
+  const c = r.counts, n = r.path.length;
+  $("stats").innerHTML = [
+    ["Entities", `${c.lines} lines, ${c.circles} circles, ${c.arcs} arcs, ${c.polylines} polylines`],
+    ["Pieces", r.pieces.length],
+    ["Points", `${n.toLocaleString()} of ${r.total_points.toLocaleString()}`],
+    ["Est. draw time", r.rows.length ? fmtDuration(r.duration_ms) : "—"],
+  ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  $("stats").hidden = false;
+
+  if (r.unreachable.length) {
+    showError(`${r.unreachable.length} point(s) are outside ${r.robot}'s reach (red dots). ` +
+              `No trajectory was generated.`);
+  }
+  const ok = r.rows.length > 0;
+  $("download").hidden = !ok;
+  $("player").hidden = !ok;
+  $("scrub").max = n; $("scrub").value = 0;
+  setProgress(0);
+}
+
+function el(tag, attrs) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+function setProgress(i) {
+  anim.idx = i;
+  const pts = result.path.slice(0, i);
+  anim.drawn.setAttribute("points", pts.map(p => p.join(",")).join(" "));
+  if (i > 0) {
+    anim.pen.setAttribute("cx", pts[i - 1][0]); anim.pen.setAttribute("cy", pts[i - 1][1]);
+    anim.pen.setAttribute("visibility", "visible");
+  } else anim.pen.setAttribute("visibility", "hidden");
+  $("scrub").value = i;
+}
+
+// Plays back at the real per-move timing from the trajectory, sped up.
+function tick(t) {
+  if (!anim.playing) return;
+  anim.carry += (t - anim.last) * Number($("speed").value);
+  anim.last = t;
+  let i = anim.idx;
+  while (i < result.rows.length && anim.carry >= result.rows[i][6]) { anim.carry -= result.rows[i][6]; i++; }
+  if (i !== anim.idx) setProgress(i);
+  if (i >= result.rows.length) return stop();
+  anim.raf = requestAnimationFrame(tick);
+}
+function play() {
+  if (anim.idx >= result.rows.length) setProgress(0);
+  anim.playing = true; anim.carry = 0; anim.last = performance.now();
+  $("play").textContent = "Pause";
+  anim.raf = requestAnimationFrame(tick);
+}
+function stop() {
+  anim.playing = false; cancelAnimationFrame(anim.raf);
+  $("play").textContent = "Play";
+}
+$("play").onclick = () => anim.playing ? stop() : play();
+$("scrub").oninput = () => { stop(); setProgress(Number($("scrub").value)); };
+
+// Same tab-separated format paths/TrajectoryIO.py reads, so the CLI can replay it.
+$("download").onclick = () => {
+  const lines = ["x\ty\ttheta1\ttheta2\tsteps1\tsteps2\tinterval",
+    ...result.rows.map(r => r.map((v, i) => i < 4 ? v.toFixed(3) : v).join("\t"))];
+  const blob = new Blob([lines.join("\n") + "\n"], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${result.robot}_${result.source}_${result.path.length}.txt`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+$("robot").onchange = $("points").onchange = () => { if (result) $("go").click(); };
+init();
+</script>
+</body>
+</html>

@@ -17,6 +17,7 @@ from comms.SerialComms import SerialComms
 from comms.NetworkComms import NetworkComms
 from comms.PsuedoComms import PsuedoComms
 from Plotter import Plotter2D
+from core.pipeline import build_trajectory
 
 ROBOT_CLASSES = {"1": FiveBar, "2": Spooler, "3": TwoLink}
 COMMS_CLASSES = {"1": SerialComms, "2": NetworkComms}
@@ -130,23 +131,6 @@ def prompt_point_count(points):
     except ValueError:
         print("Invalid input.")
         return None
-
-
-def build_trajectory(robot, points):
-    """Runs IK + step/timing calculation for each point in order.
-    Returns (trajectory, commands):
-    trajectory: list of (x, y, theta1_deg, theta2_deg)
-    commands: list of (steps1, steps2, interval_ms)
-    """
-    trajectory, commands = [], []
-    current_t1, current_t2 = robot.ik(robot.START_X, robot.START_Y)
-    for x, y in points:
-        t1, t2 = robot.ik(x, y)
-        s1, s2, interval = robot.calc_steps(current_t1, current_t2, t1, t2)
-        trajectory.append((x, y, t1, t2))
-        commands.append((s1, s2, interval))
-        current_t1, current_t2 = t1, t2
-    return trajectory, commands
 
 
 def run_dxf_pipeline(robot, preselection, order_mode, file_index):
