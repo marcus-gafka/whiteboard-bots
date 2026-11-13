@@ -1,6 +1,7 @@
 import math
 import numpy as np
 from robots.Robot import Robot
+from robots import Kinematics as kin
 
 class Spooler(Robot):
 
@@ -25,6 +26,7 @@ class Spooler(Robot):
     SPOOL_DIAMETER = 2
 
     def __init__(self):
+        super().__init__()
 
         self.ORIGIN_L1 = self.calc_l1(self.OFFSET_X, self.OFFSET_Y)
         self.ORIGIN_L2 = self.calc_l2(self.OFFSET_X, self.OFFSET_Y)
@@ -35,39 +37,44 @@ class Spooler(Robot):
     def calc_l2(self, x, y):
         return math.sqrt((self.SPOOL_DISTANCE - x)**2 + y**2)
 
+    def _length_to_theta(self, length, origin_length):
+        # Cable paid out = arc length on the spool: angle = arc_length / radius.
+        return math.degrees((length - origin_length) / (self.SPOOL_DIAMETER / 2))
+
+    def _theta_to_length(self, theta_deg, origin_length):
+        return origin_length + math.radians(theta_deg) * (self.SPOOL_DIAMETER / 2)
+
+    def _tip_from_lengths(self, l1, l2):
+        # Anchors: left spool at the origin, right spool SPOOL_DISTANCE away.
+        # elbow_up=False selects the "below the spools" solution this
+        # mechanism always uses.
+        tip = kin.circle_intersection(
+            np.array([0.0, 0.0]), l1,
+            np.array([self.SPOOL_DISTANCE, 0.0]), l2,
+            elbow_up=False,
+        )
+        if tip is None:
+            raise ValueError("FK impossible: cable lengths do not intersect")
+        return tip
+
     def ik(self, x, y):
         x, y = self.apply_board_offset(x,y)
 
         l1 = self.calc_l1(x, y)
         l2 = self.calc_l2(x, y)
 
-        t1 = ((l1 - self.ORIGIN_L1) * 360) / (math.pi * self.SPOOL_DIAMETER)
-        t2 = ((l2 - self.ORIGIN_L2) * 360) / (math.pi * self.SPOOL_DIAMETER)
+        t1 = self._length_to_theta(l1, self.ORIGIN_L1)
+        t2 = self._length_to_theta(l2, self.ORIGIN_L2)
 
         return t1, t2
 
     def fk(self, theta1_deg, theta2_deg):
-        # Convert angles to cable lengths
-        l1 = self.ORIGIN_L1 + (theta1_deg * math.pi * self.SPOOL_DIAMETER) / 360
-        l2 = self.ORIGIN_L2 + (theta2_deg * math.pi * self.SPOOL_DIAMETER) / 360
+        l1 = self._theta_to_length(theta1_deg, self.ORIGIN_L1)
+        l2 = self._theta_to_length(theta2_deg, self.ORIGIN_L2)
 
-        # Anchor points
         A = np.array([0.0, 0.0])
         B = np.array([self.SPOOL_DISTANCE, 0.0])
-
-        # Circle-circle intersection
-        d = self.SPOOL_DISTANCE
-        x = (l1**2 - l2**2 + d**2) / (2 * d)
-
-        y_sq = l1**2 - x**2
-        if y_sq < 0:
-            raise ValueError("FK impossible: cable lengths do not intersect")
-
-        # Choose lower solution (below spools)
-        y = -math.sqrt(y_sq)
-
-        # Apply board offset removal
-        E = np.array([x, y])
+        E = self._tip_from_lengths(l1, l2)
 
         return {
             "A": A,
@@ -76,19 +83,15 @@ class Spooler(Robot):
             "l1": l1,
             "l2": l2
         }
-    
+
     def jacobian(self, theta1_deg, theta2_deg):
+        l1 = self._theta_to_length(theta1_deg, self.ORIGIN_L1)
+        l2 = self._theta_to_length(theta2_deg, self.ORIGIN_L2)
 
-        # Convert angles back to cable lengths to get tip position
-        l1 = self.ORIGIN_L1 + (theta1_deg * math.pi * self.SPOOL_DIAMETER) / 360
-        l2 = self.ORIGIN_L2 + (theta2_deg * math.pi * self.SPOOL_DIAMETER) / 360
-
-        d = self.SPOOL_DISTANCE
-        x = (l1**2 - l2**2 + d**2) / (2 * d)
-        y_sq = l1**2 - x**2
-        if y_sq < 0:
+        try:
+            x, y = self._tip_from_lengths(l1, l2)
+        except ValueError:
             return np.zeros((2, 2))
-        y = -math.sqrt(y_sq)
 
         S = self.SPOOL_DISTANCE
         D = self.SPOOL_DIAMETER

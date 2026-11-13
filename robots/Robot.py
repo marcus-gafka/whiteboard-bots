@@ -1,7 +1,16 @@
+import abc
+
 import numpy as np
 import math
 
-class Robot:
+class Robot(abc.ABC):
+    """Shared contract for the interchangeable drawing mechanisms.
+
+    Subclasses must implement ik/fk/jacobian/get_links; everything else
+    (step/timing calculation, board-offset geometry, dexterity metrics) is
+    provided here so main.py/paths/*.py/Plotter.py can treat any
+    subclass polymorphically.
+    """
 
     name = ""
 
@@ -58,6 +67,22 @@ class Robot:
         board_x = robot_x - self.OFFSET_X
         board_y = robot_y - self.OFFSET_Y
         return board_x, board_y
+
+    @abc.abstractmethod
+    def ik(self, x, y):
+        """Inverse kinematics: board (x, y) -> (theta1_deg, theta2_deg)."""
+
+    @abc.abstractmethod
+    def fk(self, theta1_deg, theta2_deg):
+        """Forward kinematics: joint angles -> dict of named points, including 'tip'."""
+
+    @abc.abstractmethod
+    def jacobian(self, theta1_deg, theta2_deg):
+        """2x2 Jacobian relating joint-angle rates to tip-velocity."""
+
+    @abc.abstractmethod
+    def get_links(self, theta1_deg, theta2_deg):
+        """List of (point, point) segments describing the linkage, for plotting."""
 
     @classmethod
     def calc_steps(cls, currentTheta1, currentTheta2, targetTheta1, targetTheta2):

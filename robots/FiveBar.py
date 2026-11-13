@@ -64,7 +64,7 @@ class FiveBar(Robot):
 
         return math.degrees(theta1), math.degrees(theta2)
 
-    def fk(self, theta1_deg, theta2_deg, elbow_up=True):
+    def _forward_points(self, theta1_deg, theta2_deg, elbow_up=True):
         t1 = math.radians(theta1_deg)
         t2 = math.radians(theta2_deg)
 
@@ -82,6 +82,11 @@ class FiveBar(Robot):
             D, self.l3,
             elbow_up=elbow_up
         )
+
+        return A, B, C, D, E, t1, t2
+
+    def fk(self, theta1_deg, theta2_deg, elbow_up=True):
+        A, B, C, D, E, _t1, _t2 = self._forward_points(theta1_deg, theta2_deg, elbow_up)
 
         # Tip position offset along l3 (adds "a")
         vec_l3 = E - D           # vector along l3
@@ -111,19 +116,7 @@ class FiveBar(Robot):
         ]
     
     def jacobian(self, theta1_deg, theta2_deg, elbow_up=True):
-        t1 = math.radians(theta1_deg)
-        t2 = math.radians(theta2_deg)
-
-        # Base joints
-        A = np.array([0.0, 0.0])
-        B = np.array([self.l1, 0.0])
-
-        # Elbow joints
-        C = A + self.l5 * np.array([math.cos(t1), math.sin(t1)])
-        D = B + self.l2 * np.array([math.cos(t2), math.sin(t2)])
-
-        # Tip via loop closure
-        E = kin.circle_intersection(C, self.l4, D, self.l3, elbow_up=elbow_up)
+        _A, _B, C, D, E, t1, t2 = self._forward_points(theta1_deg, theta2_deg, elbow_up)
 
         # Partial derivatives of F = |E-C|^2 - l4^2
         Fx = 2 * (E[0] - C[0])
