@@ -67,10 +67,14 @@ $("tabs").onclick = (e) => {
   if (mode && mode !== app.mode && app.drawing) busy(() => showMode(mode));
 };
 
-async function showMode(mode) {
+function selectTab(mode) {
   app.mode = mode;
   for (const b of $("tabs").querySelectorAll("button")) b.setAttribute("aria-selected", b.dataset.mode === mode);
   $("saveName").placeholder = `${app.drawing.source} (${mode})`;
+}
+
+async function showMode(mode) {
+  selectTab(mode);
   if (mode === "auto") {
     if (!app.autoPieces) app.autoPieces = (await api("POST", `/api/drawings/${app.drawing.drawing}/order`, { mode })).pieces;
     renderAuto();
@@ -284,9 +288,7 @@ $("editAuto").onclick = () => busy(async () => {
   const url = `/api/drawings/${app.drawing.drawing}/manual`;
   await api("POST", url, { action: "reset" });
   applyManual(await api("POST", url, { action: "autofinish" }));
-  app.mode = "manual";
-  for (const b of $("tabs").querySelectorAll("button")) b.setAttribute("aria-selected", b.dataset.mode === "manual");
-  $("saveName").placeholder = `${app.drawing.source} (manual)`;
+  selectTab("manual");
   setTool("flip");
   renderEditor();
 });

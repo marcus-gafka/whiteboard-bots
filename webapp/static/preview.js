@@ -27,6 +27,10 @@ function fillTrajectories(list, selectId) {
       <a href="/">Trajectory generator</a>, or import a points file.</p>`;
     return;
   }
+  selectionChanged();
+}
+
+function selectionChanged() {
   history.replaceState(null, "", `?t=${$("trajectory").value}`);
   refresh();
 }
@@ -45,12 +49,9 @@ $("importFile").onchange = async () => {
   } catch (e) { showError(e.message); }
 };
 
-$("trajectory").onchange = () => {
-  history.replaceState(null, "", `?t=${$("trajectory").value}`);
-  refresh();
-};
-$("robot").onchange = () => refresh();
-$("points").onchange = () => refresh();
+$("trajectory").onchange = selectionChanged;
+$("robot").onchange = refresh;
+$("points").onchange = refresh;
 $("deleteTraj").onclick = async () => {
   const id = $("trajectory").value, name = $("trajectory").selectedOptions[0]?.textContent;
   if (!id || !window.confirm(`Delete saved trajectory “${name}”?`)) return;

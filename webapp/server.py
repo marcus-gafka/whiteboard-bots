@@ -27,7 +27,7 @@ from collections import OrderedDict
 from typing import Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from serial.tools import list_ports as serial_list_ports
@@ -53,12 +53,37 @@ MAX_DISPLAY_POINTS = 20000
 app = FastAPI(title="Whiteboard Bots")
 
 
+# User-facing errors raised below the HTTP layer, mapped to status codes once
+# here instead of in a try/except around every call.
+def _error_handler(status, message=None):
+    def handle(_request, exc):
+        return JSONResponse({"detail": message or str(exc)}, status_code=status)
+    return handle
+
+
+app.add_exception_handler(pipeline.PipelineError, _error_handler(400))
+app.add_exception_handler(manual_order.ManualOrderError, _error_handler(400))
+app.add_exception_handler(store.TrajectoryNotFound, _error_handler(404, "Trajectory not found."))
+app.add_exception_handler(RunnerBusy, _error_handler(409))
+
+
 def _stride(total_points):
     return max(1, -(-total_points // MAX_DISPLAY_POINTS))  # ceil
 
 
 def _round_pts(points, nd=4):
     return [[round(float(x), nd), round(float(y), nd)] for x, y in points]
+
+
+async def _read_upload(file):
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise pipeline.PipelineError("File is larger than 20 MB.")
+    return data
+
+
+def _name(requested, default):
+    return (requested or "").strip()[:80] or default
 
 
 def _display(points, stride):
@@ -116,26 +141,21 @@ def list_samples():
 @app.post("/api/drawings")
 async def create_drawing(sample: str | None = Form(None), file: UploadFile | None = File(None)):
     """Upload a DXF (or name a bundled sample) and extract its pieces."""
-    try:
-        if file is not None:
-            data = await file.read(MAX_UPLOAD_BYTES + 1)
-            if len(data) > MAX_UPLOAD_BYTES:
-                raise pipeline.PipelineError("File is larger than 20 MB.")
-            source = os.path.splitext(os.path.basename(file.filename or "upload"))[0]
-        elif sample:
-            # basename() keeps the lookup inside DXF_FOLDER.
-            safe = os.path.basename(sample)
-            path = os.path.join(c.DXF_FOLDER, safe)
-            if not os.path.isfile(path):
-                raise pipeline.PipelineError(f"Sample '{safe}' not found.")
-            source = os.path.splitext(safe)[0]
-            with open(path, "rb") as f:
-                data = f.read()
-        else:
-            raise pipeline.PipelineError("Upload a DXF file or choose a sample.")
-        geometries, counts = pipeline.extract(pipeline.read_dxf(data))
-    except pipeline.PipelineError as e:
-        raise HTTPException(400, str(e))
+    if file is not None:
+        data = await _read_upload(file)
+        source = os.path.splitext(os.path.basename(file.filename or "upload"))[0]
+    elif sample:
+        # basename() keeps the lookup inside DXF_FOLDER.
+        safe = os.path.basename(sample)
+        path = os.path.join(c.DXF_FOLDER, safe)
+        if not os.path.isfile(path):
+            raise pipeline.PipelineError(f"Sample '{safe}' not found.")
+        source = os.path.splitext(safe)[0]
+        with open(path, "rb") as f:
+            data = f.read()
+    else:
+        raise pipeline.PipelineError("Upload a DXF file or choose a sample.")
+    geometries, counts = pipeline.extract(pipeline.read_dxf(data))
 
     drawing = Drawing(source, counts, geometries)
     _store_drawing(drawing)
@@ -207,26 +227,23 @@ def manual_act(drawing_id: str, act: ManualAction):
     with drawing.lock:
         st = drawing.manual = drawing.manual or manual_order.ManualOrderState(drawing.geometries)
         new_ids = []
-        try:
-            if act.action == "place":
-                st.place(_need(act.piece, "piece"), act.reverse)
-            elif act.action == "flip":
-                st.flip(_need(act.piece, "piece"))
-            elif act.action == "cut":
-                point = _need(act.point, "point")
-                new_ids = list(st.cut_at_point(_need(act.piece, "piece"), point))
-            elif act.action == "undo":
-                st.undo()
-            elif act.action == "reset":
-                drawing.manual = manual_order.ManualOrderState(drawing.geometries)
-                return _manual_state(drawing)
-            elif act.action == "autofinish":
-                pool = sorted(st.pool_ids)
-                seq = path_ordering.tsp_order_indices(
-                    st.pen_position(drawing.start), [st.all_pieces[pid] for pid in pool])
-                st.place_many([(pool[i], rev) for i, rev in seq])
-        except manual_order.ManualOrderError as e:
-            raise HTTPException(400, str(e))
+        if act.action == "place":
+            st.place(_need(act.piece, "piece"), act.reverse)
+        elif act.action == "flip":
+            st.flip(_need(act.piece, "piece"))
+        elif act.action == "cut":
+            point = _need(act.point, "point")
+            new_ids = list(st.cut_at_point(_need(act.piece, "piece"), point))
+        elif act.action == "undo":
+            st.undo()
+        elif act.action == "reset":
+            drawing.manual = manual_order.ManualOrderState(drawing.geometries)
+            return _manual_state(drawing)
+        elif act.action == "autofinish":
+            pool = sorted(st.pool_ids)
+            seq = path_ordering.tsp_order_indices(
+                st.pen_position(drawing.start), [st.all_pieces[pid] for pid in pool])
+            st.place_many([(pool[i], rev) for i, rev in seq])
         return _manual_state(drawing, include_pieces=new_ids)
 
 
@@ -250,7 +267,7 @@ class SaveRequest(BaseModel):
 def save_trajectory(req: SaveRequest):
     drawing = _get_drawing(req.drawing)
     pieces = _ordered(drawing, req.mode)
-    name = (req.name or "").strip()[:80] or f"{drawing.source} ({req.mode})"
+    name = _name(req.name, f"{drawing.source} ({req.mode})")
     return store.save(TRAJECTORY_DIR, name=name, source=drawing.source, mode=req.mode,
                       pieces=pieces, bounds=drawing.bounds)
 
@@ -258,16 +275,10 @@ def save_trajectory(req: SaveRequest):
 @app.post("/api/trajectories/import")
 async def import_trajectory(file: UploadFile = File(...), name: str | None = Form(None)):
     """Save an uploaded points file (see pipeline.parse_points) as a trajectory."""
-    data = await file.read(MAX_UPLOAD_BYTES + 1)
-    try:
-        if len(data) > MAX_UPLOAD_BYTES:
-            raise pipeline.PipelineError("File is larger than 20 MB.")
-        pieces = pipeline.parse_points(data.decode("utf-8", errors="replace"))
-    except pipeline.PipelineError as e:
-        raise HTTPException(400, str(e))
+    data = await _read_upload(file)
+    pieces = pipeline.parse_points(data.decode("utf-8", errors="replace"))
     source = os.path.splitext(os.path.basename(file.filename or "points"))[0]
-    name = (name or "").strip()[:80] or f"{source} (imported)"
-    return store.save(TRAJECTORY_DIR, name=name, source=source, mode="imported",
+    return store.save(TRAJECTORY_DIR, name=_name(name, f"{source} (imported)"), source=source, mode="imported",
                       pieces=pieces, bounds=pipeline.bounds(pieces))
 
 
@@ -276,19 +287,9 @@ def list_trajectories():
     return store.list_meta(TRAJECTORY_DIR)
 
 
-def _load_trajectory(tid):
-    try:
-        return store.load(TRAJECTORY_DIR, tid)
-    except store.TrajectoryNotFound:
-        raise HTTPException(404, "Trajectory not found.")
-
-
 @app.delete("/api/trajectories/{tid}")
 def delete_trajectory(tid: str):
-    try:
-        store.delete(TRAJECTORY_DIR, tid)
-    except store.TrajectoryNotFound:
-        raise HTTPException(404, "Trajectory not found.")
+    store.delete(TRAJECTORY_DIR, tid)
     return {"deleted": tid}
 
 
@@ -312,13 +313,10 @@ class PlanRequest(BaseModel):
 
 
 def _plan(tid, robot_name, points):
-    """Returns (meta, robot, plan); raises HTTPException on user errors."""
-    meta, pieces = _load_trajectory(tid)
-    try:
-        bot = pipeline.make_robot(robot_name)
-        return meta, bot, pipeline.plan(bot, pieces, points)
-    except pipeline.PipelineError as e:
-        raise HTTPException(400, str(e))
+    """Returns (meta, robot, plan)."""
+    meta, pieces = store.load(TRAJECTORY_DIR, tid)
+    bot = pipeline.make_robot(robot_name)
+    return meta, bot, pipeline.plan(bot, pieces, points)
 
 
 @app.post("/api/trajectories/{tid}/plan")
@@ -329,7 +327,6 @@ def plan_trajectory(tid: str, req: PlanRequest):
     return {
         "trajectory": meta,
         "robot": bot.name,
-        "points_requested": req.points,
         "board": _board(bot),
         "total_points": p["total_points"],
         "pieces": [_display(g, stride) for g in p["fitted"]],
@@ -397,11 +394,8 @@ def run_start(req: RunRequest):
         raise HTTPException(400, f"{len(p['unreachable'])} point(s) are outside {bot.name}'s reach.")
     run_meta = {"kind": "draw", "trajectory": meta["id"], "name": meta["name"], "robot": bot.name,
                 "points": req.points, "port": req.port}
-    try:
-        RUNNER.start(p["commands"], [(t1, t2) for _, _, t1, t2 in p["trajectory"]],
-                     _open_comms(req.port, req.baud), bot.name, run_meta)
-    except RunnerBusy as e:
-        raise HTTPException(409, str(e))
+    RUNNER.start(p["commands"], [(t1, t2) for _, _, t1, t2 in p["trajectory"]],
+                 _open_comms(req.port, req.baud), bot.name, run_meta)
     return RUNNER.status()
 
 
@@ -434,20 +428,14 @@ def run_home(req: PortRequest):
     bot = pipeline.make_robot(robot_name)
     home = bot.ik(*bot.START_XY)
     command = bot.calc_steps(t1, t2, *home)
-    try:
-        RUNNER.start([command], [home], _open_comms(req.port, req.baud), robot_name,
-                     {"kind": "home", "robot": robot_name, "port": req.port}, ends_at_home=True)
-    except RunnerBusy as e:
-        raise HTTPException(409, str(e))
+    RUNNER.start([command], [home], _open_comms(req.port, req.baud), robot_name,
+                 {"kind": "home", "robot": robot_name, "port": req.port}, ends_at_home=True)
     return RUNNER.status()
 
 
 @app.post("/api/run/mark-home")
 def run_mark_home():
-    try:
-        RUNNER.mark_home()
-    except RunnerBusy as e:
-        raise HTTPException(409, str(e))
+    RUNNER.mark_home()
     return RUNNER.status()
 
 
@@ -468,5 +456,6 @@ def preview_page():
 @app.get("/live")
 def live_page():
     return FileResponse(os.path.join(STATIC_DIR, "live.html"))
+
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
